@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>aiVibe Studio</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.png">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><div class="logo"></div>aiVibe Studio <small id="version">0.1.0</small></div>
+    <div class="gpu" data-strip="state"><span class="dot" id="gpuDot"></span><span id="gpuText">GPU ready</span></div>
+    <div class="stat" data-strip="vram" title="GPU memory in use"><label>Memory</label><div class="vram"><i id="vramBar" style="width:8%"></i></div><small id="vramText">-</small></div>
+    <div class="stat" data-strip="load" title="GPU load"><label>Load</label><div class="vram"><i id="utilBar" style="width:0%"></i></div><small id="utilText">-</small></div>
+    <div class="stat" data-strip="temp" title="GPU temperature"><label>Temp</label><small id="tempText">-</small></div>
+    <div class="stat" data-strip="model"><label>Loaded</label><small id="loadedText">nothing</small></div>
+    <div class="spacer"></div>
+  </header>
+
+  <nav class="rail">
+    <button class="on" id="navCreate" title="Create">✦<span>Create</span></button>
+    <button id="navBatch" title="Load a batch file">☰<span>Batch</span></button>
+    <button id="navFiles" title="Open the output folder">▤<span>Output</span></button>
+    <button id="navModels" title="Models">◈<span>Models</span></button>
+    <button id="navStorage" title="Model storage">⛁<span>Storage</span></button>
+    <button id="navGuide" title="How to use">?<span>Guide</span></button>
+    <button id="navReport" title="Report a problem (Ctrl+Shift+B): saves your note, the log, a screenshot and the selected picture">⚑<span>Report</span></button>
+    <div class="bottom"></div>
+    <button id="navTheme" title="Light / dark">◐<span id="themeLabel">Light</span></button>
+    <button id="navUpdate" title="Check for a new version">⟳<span>Updates</span></button>
+    <button id="navSettings" title="Settings">⚙<span>Settings</span></button>
+  </nav>
+
+  <main class="work" id="work">
+    <div class="col">
+      <section class="panel" data-panel="model">
+        <h3>Model <span class="grip">⋮⋮</span></h3>
+        <select id="model"></select>
+        <div class="desc" id="modelDesc"></div>
+        <div class="row"><span class="tag" id="modelLicense"></span><span class="tag" id="modelState"></span></div>
+        <div class="row"><button id="btnGuide" style="flex:1">Model guide</button><button id="btnAddModel" style="flex:1">Custom models</button></div>
+      </section>
+      <section class="panel" data-panel="subjects">
+        <h3>Subjects <span class="grip">⋮⋮</span></h3>
+        <div class="chips" id="subjectChips"></div>
+        <div id="subjectPicks" class="stack"></div>
+        <div class="desc" id="subjectNote"></div>
+        <label><input id="faceFix" type="checkbox" checked style="width:auto"> Face fix (redraws small faces with the subject's likeness)</label>
+        <div class="row"><button id="btnNewSubject" style="flex:1">+ New subject</button><button id="btnManageSubjects">Manage</button></div>
+      </section>
+      <section class="panel" data-panel="reference">
+        <h3>Reference image <span class="grip">⋮⋮</span></h3>
+        <div class="row"><div class="refthumb" id="refThumb">none</div>
+          <div style="flex:1" class="stack"><button id="btnPickRef">Pick image</button><button id="btnClearRef">Clear</button></div></div>
+        <label>Strength</label>
+        <div class="slider"><input id="refStrength" type="range" min="0" max="1" step="0.05" value="0.5"><output id="refStrengthOut">0.50</output></div>
+      </section>
+      <section class="panel" data-panel="canvas">
+        <h3>Canvas <span class="grip">⋮⋮</span></h3>
+        <div class="seg" id="aspect"><button class="on" data-a="1:1">1:1</button><button data-a="4:5">4:5</button><button data-a="16:9">16:9</button></div>
+        <div class="row"><input id="width" type="number" step="8" value="1024"><span>×</span><input id="height" type="number" step="8" value="1024"></div>
+        <div class="row"><button id="btnRecommended" style="width:100%">Recommended settings</button></div>
+      </section>
+      <section class="panel" data-panel="quality">
+        <h3>Quality <span class="grip">⋮⋮</span></h3>
+        <label>Thinking (steps)</label>
+        <div class="slider"><input id="steps" type="range" min="1" max="80" value="30"><output id="stepsOut">30</output></div>
+        <label>Guidance (how closely it follows the prompt)</label>
+        <div class="slider"><input id="guidance" type="range" min="0" max="15" step="0.5" value="6"><output id="guidanceOut">6.0</output></div>
+      </section>
+
+
+    </div>
+
+    <div class="col">
+    <section class="studio" data-panel="studio">
+      <div class="summary"><span class="grip" title="Drag to move the picture area">⋮⋮</span><span id="summary"></span><span class="spacer"></span><span id="lastInfo"></span></div>
+      <div class="preview" id="preview"><div class="empty" id="previewEmpty">Your images appear here.<br><small>Write a prompt, then Generate (Ctrl+Enter).</small></div><img id="previewImg" alt="" hidden><span class="caption" id="previewCaption" hidden></span><button class="prevup" id="btnPreviewUp" hidden>Upscale this</button></div>
+      <div>
+        <div class="prompts">
+          <section class="panel" data-fixed="prompt">
+            <h3>Prompt <span class="counter" id="promptCount">0 / 75 words</span><button class="ghost" id="btnExpand" style="margin-left:8px">Expand</button><button class="ghost" id="clearPrompt" data-clear="prompt" title="Clear the prompt (Ctrl+Z brings it back)" style="margin-left:8px">Clear</button></h3>
+            <textarea id="prompt" placeholder="Describe the image. Ctrl+Enter to generate."></textarea>
+            <div class="row"><div class="chips" id="chips"></div></div>
+          </section>
+          <section class="panel" data-fixed="negative">
+            <h3>Negative prompt <span class="counter" id="negCount"></span><button class="ghost" id="clearNegative" data-clear="negative" title="Clear the negative prompt (Ctrl+Z brings it back)" style="margin-left:8px">Clear</button></h3>
+            <textarea id="negative">low quality, blurry, distorted</textarea>
+            <div class="row"><select id="negPreset"><option>Presets…</option></select></div>
+          </section>
+        </div>
+        <div class="go" style="margin-top:var(--gap)">
+          <input id="name" placeholder="Name (optional, used in the file name)" style="max-width:320px">
+          <span class="spacer"></span><kbd>Ctrl+Enter</kbd>
+          <button class="primary" id="btnGenerate">Generate</button>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <div class="col">
+      <section class="panel" data-panel="variations">
+        <h3>Variations <span class="grip">⋮⋮</span></h3>
+        <div class="row"><label style="flex:1">Images</label><input id="count" type="number" min="1" max="8" value="1" style="width:70px"></div>
+        <div class="row"><label style="flex:1"><input id="randomSeed" type="checkbox" checked style="width:auto"> Random seed</label><input id="seed" type="number" value="-1" style="width:120px" disabled></div>
+      </section>
+      <section class="panel" data-panel="device">
+        <h3>Processing device <span class="grip">⋮⋮</span></h3>
+        <div class="seg" id="device"><button class="on" data-d="Auto">Auto</button><button data-d="GPU">GPU</button><button data-d="CPU">CPU</button></div>
+      </section>
+      <section class="panel" data-panel="upscale">
+        <h3>Upscale <span class="grip">⋮⋮</span></h3>
+        <div class="seg4" id="upSize"><button data-u="2x">2x</button><button data-u="4x">4x</button><button data-u="1080p">1080p</button><button data-u="4k">4K</button></div>
+        <div class="row"><label style="flex:1">or long edge (px)</label><input id="upPx" type="number" min="512" max="8192" step="8" placeholder="e.g. 2400" style="width:110px"></div>
+        <div class="row"><button class="primary" id="btnUpscale" style="flex:1" disabled>Upscale selected (0)</button></div>
+        <div class="row"><button id="btnImportUp" style="flex:1">Import image… and upscale</button></div>
+        <div class="desc">Click a picture to pick it; Ctrl+click or Shift+click to pick several.</div>
+      </section>
+      <section class="panel" data-panel="recent">
+        <h3>Recent pictures <span class="grip">⋮⋮</span></h3>
+        <div id="recentSlot"></div>
+      </section>
+      <section class="panel" data-panel="assistant">
+        <h3>Assistant <span class="grip">⋮⋮</span></h3>
+        <textarea id="assistantRequest" rows="3" placeholder="e.g. 20 space sci-fi pictures, upscaled to 1080p"></textarea>
+        <div class="row"><button class="primary" id="btnAssistant" style="flex:1">Write batch</button></div>
+        <div class="desc" id="assistantStatus">An AI writes a batch from your request. You check it before anything runs.</div>
+      </section>
+      <section class="panel grow" data-panel="log">
+        <h3>Log <button class="ghost" id="btnClear" style="margin-left:auto">Clear</button></h3>
+        <div class="desc" id="statusLine"></div>
+        <div class="log" id="log"></div>
+      </section>
+    </div>
+  </main>
+
+  <div class="dock" id="dock"><div class="gallery" id="gallery"></div></div>
+</div>
+<div class="modal" id="modal" hidden><div class="sheet"><div class="row"><h2 id="modalTitle"></h2><span class="spacer"></span><button id="modalClose">Close</button></div><div id="modalBody"></div></div></div>
+<div class="menu" id="moreMenu" hidden></div>
+<div class="modal report" id="report" hidden><div class="sheet">
+  <h2>Report a problem</h2>
+  <p class="desc">What went wrong, and what were you doing? One or two lines is plenty. The report also keeps the last 30 minutes of the log, a screenshot of the window as it was, your settings and the selected picture. Nothing leaves this PC.</p>
+  <textarea id="reportNote" rows="5" placeholder="e.g. pressed Cancel during a batch, it kept going for a minute"></textarea>
+  <div class="row" style="justify-content:flex-end;margin-top:10px"><button id="reportClose">Close</button><button class="primary" id="reportSave">Save report</button></div>
+</div></div>
+<div class="modal review" id="assistantReview" hidden><div class="sheet">
+  <div class="row"><h2>Check the batch</h2><span class="spacer"></span><span class="desc" id="reviewInfo"></span></div>
+  <ul class="problems" id="reviewProblems"></ul>
+  <div id="reviewDefaults" class="desc"></div>
+  <div id="reviewRows"></div>
+  <textarea id="reviewText" rows="18" hidden spellcheck="false"></textarea>
+  <div class="row"><button id="reviewAdd">Add line</button><button class="ghost" id="reviewTextToggle">Edit as text</button></div>
+  <div class="row"><input id="reviewInstruction" placeholder="Change it, e.g. make them all night scenes"><button id="reviewRevise">Revise</button></div>
+  <div class="row" style="justify-content:flex-end"><span class="desc" id="reviewStatus" style="flex:1"></span><button id="reviewClose">Close</button><button class="primary" id="reviewGo">Go</button></div>
+</div></div>
+<div class="busy" id="busy" hidden><div class="sheet busysheet">
+  <h2 id="busyTitle">Working</h2>
+  <div class="bar big"><i id="busyBar" style="width:0%"></i></div>
+  <div class="row"><span id="busyCount" style="flex:1"></span><b id="busyEta"></b></div>
+  <div class="desc" id="busyDetail"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px"><button id="busyReport">Report a problem</button><button id="busyCancel">Cancel</button></div>
+</div></div>
+<div class="busy" id="dl" hidden><div class="sheet busysheet">
+  <h2 id="dlTitle">Downloading</h2>
+  <div class="bar big"><i id="dlBar" style="width:0%"></i></div>
+  <div class="row"><span id="dlCount" style="flex:1"></span></div>
+  <div class="desc" id="dlNext"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px"><button id="dlHide">Keep working</button><button id="dlCancel">Cancel download</button></div>
+</div></div>
+<script src="app.js"></script>
+</body>
+</html>

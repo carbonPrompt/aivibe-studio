@@ -1,0 +1,4 @@
+# one prompt per line, lines starting with # are skipped
+a dinosaur in its natural swamp environment
+a red sports car on a mountain road at sunset
+a cozy cabin in the snow at night

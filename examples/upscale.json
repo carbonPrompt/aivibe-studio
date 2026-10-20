@@ -1,0 +1,19 @@
+{
+ "defaults": {
+  "model": "z-image-turbo",
+  "upscale": "4k"
+ },
+ "items": [
+  {
+   "prompt": "a lighthouse on a cliff in a storm, crashing waves",
+   "name": "lighthouse"
+  },
+  {
+   "prompt": "a cozy reading nook with rain on the window"
+  },
+  {
+   "prompt": "a vintage red pickup truck in an autumn forest",
+   "upscale": "1080p"
+  }
+ ]
+}

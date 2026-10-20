@@ -1,0 +1,34 @@
+aiVibe Studio
+Copyright (c) 2026 carbonPrompt. Licensed under the MIT License (see LICENSE).
+Made in collaboration with AI agents (Claude and Gemini) and a human.
+
+This project includes or downloads the following third-party work.
+
+Included in this repository
+---------------------------
+studio/train/train_dreambooth_lora_sdxl.py
+    From huggingface/diffusers v0.41.0, examples/dreambooth/train_dreambooth_lora_sdxl.py.
+    Copyright The HuggingFace Team. Apache License 2.0
+    (https://www.apache.org/licenses/LICENSE-2.0).
+    Modified: --report_to defaults to "none", and "none" means no tracker
+    (log_with=None, no init_trackers). The original header is kept in the file.
+
+Included in the installer
+-------------------------
+uv (Astral Software Inc.), version in installer/uv.version.
+    MIT or Apache License 2.0. https://github.com/astral-sh/uv
+
+Downloaded during setup (not redistributed here)
+------------------------------------------------
+Python 3.12 (PSF License), PyTorch and torchvision (BSD-3-Clause), diffusers, transformers,
+accelerate, peft, safetensors, huggingface_hub (Apache-2.0), pywebview (BSD-3-Clause),
+OpenCV (Apache-2.0), Pillow (MIT-CMU), numpy (BSD-3-Clause), spandrel (MIT), einops (MIT)
+and the other packages pinned in installer/requirements.lock.txt, each under its own license.
+
+Downloaded at runtime when the user asks (not redistributed here)
+-----------------------------------------------------------------
+Real-ESRGAN x4plus weights (Comfy-Org/Real-ESRGAN_repackaged), BSD-3-Clause.
+IP-Adapter weights (h94/IP-Adapter), Apache-2.0.
+The image models listed in README.md, each under the license on its Hugging Face model card
+(CreativeML OpenRAIL-M, OpenRAIL++, the Stability AI Community License, the Playground v2.5
+license, Apache-2.0 and others). The user accepts each model's license when downloading it.

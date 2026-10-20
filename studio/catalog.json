@@ -1,0 +1,281 @@
+{
+ "models": [
+  {
+   "id": "sd35-large",
+   "name": "Stable Diffusion 3.5 Large",
+   "family": "sd3",
+   "pipeline": "StableDiffusion3Pipeline",
+   "source": {
+    "hf": "stabilityai/stable-diffusion-3.5-large"
+   },
+   "app_folder_prefix": "stable-diffusion-3.5-lar",
+   "license": "conditions",
+   "defaults": {
+    "steps": 28,
+    "guidance": 4.5,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 11000,
+   "offload": true,
+   "size_gb": 25.7,
+   "description": "Strong prompt following and fine detail. Slower; best for complex scenes.",
+   "min_vram_gb": 11,
+   "gated": true
+  },
+  {
+   "id": "sd35-large-turbo",
+   "name": "SD 3.5 Large Turbo",
+   "family": "sd3",
+   "pipeline": "StableDiffusion3Pipeline",
+   "source": {
+    "hf": "stabilityai/stable-diffusion-3.5-large-turbo"
+   },
+   "app_folder_prefix": null,
+   "license": "conditions",
+   "defaults": {
+    "steps": 4,
+    "guidance": 0.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 11000,
+   "offload": true,
+   "size_gb": 25.7,
+   "description": "SD 3.5 Large in 4 steps. Fast drafts with good prompt following.",
+   "min_vram_gb": 11,
+   "gated": true
+  },
+  {
+   "id": "sd35-medium",
+   "name": "Stable Diffusion 3.5 Medium",
+   "family": "sd3",
+   "pipeline": "StableDiffusion3Pipeline",
+   "source": {
+    "hf": "stabilityai/stable-diffusion-3.5-medium"
+   },
+   "app_folder_prefix": null,
+   "license": "conditions",
+   "defaults": {
+    "steps": 28,
+    "guidance": 4.5,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 9000,
+   "offload": true,
+   "size_gb": 16.0,
+   "description": "Smaller SD 3.5. Good all-rounder, lighter on memory.",
+   "min_vram_gb": 8,
+   "gated": true
+  },
+  {
+   "id": "juggernaut-x",
+   "name": "Juggernaut XL V10",
+   "family": "sdxl",
+   "pipeline": "StableDiffusionXLPipeline",
+   "source": {
+    "hf": "RunDiffusion/Juggernaut-X-v10"
+   },
+   "app_folder_prefix": "juggernaut-x-v10",
+   "license": "nc",
+   "defaults": {
+    "steps": 30,
+    "guidance": 6.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 10000,
+   "offload": false,
+   "size_gb": 12.9,
+   "description": "Photorealism, versatile. Personal use only (license).",
+   "min_vram_gb": 8,
+   "gated": false
+  },
+  {
+   "id": "realvis-v5",
+   "name": "RealVisXL V5.0",
+   "family": "sdxl",
+   "pipeline": "StableDiffusionXLPipeline",
+   "source": {
+    "hf": "SG161222/RealVisXL_V5.0"
+   },
+   "app_folder_prefix": "realvisxl_v5.0",
+   "license": "commercial",
+   "defaults": {
+    "steps": 30,
+    "guidance": 6.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 10000,
+   "offload": false,
+   "size_gb": 6.5,
+   "description": "Hyperrealistic portraits and scenes. Lifelike people.",
+   "min_vram_gb": 8,
+   "gated": false
+  },
+  {
+   "id": "dreamshaper-8",
+   "name": "DreamShaper 8",
+   "family": "sd15",
+   "pipeline": "StableDiffusionPipeline",
+   "source": {
+    "hf": "Lykon/dreamshaper-8"
+   },
+   "app_folder_prefix": "dreamshaper-8",
+   "license": "commercial",
+   "defaults": {
+    "steps": 25,
+    "guidance": 7.0,
+    "width": 512,
+    "height": 512
+   },
+   "vram_mb": 4000,
+   "offload": false,
+   "size_gb": 2.6,
+   "description": "Artistic and fast. Best at 512 to 768 pixels.",
+   "min_vram_gb": 4,
+   "gated": false
+  },
+  {
+   "id": "playground-25",
+   "name": "Playground v2.5",
+   "family": "playground",
+   "pipeline": "StableDiffusionXLPipeline",
+   "source": {
+    "hf": "playgroundai/playground-v2.5-1024px-aesthetic"
+   },
+   "app_folder_prefix": null,
+   "license": "conditions",
+   "defaults": {
+    "steps": 30,
+    "guidance": 3.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 10000,
+   "offload": false,
+   "size_gb": 7.0,
+   "description": "Aesthetic, vivid colour. Low guidance (about 3).",
+   "min_vram_gb": 8,
+   "gated": false
+  },
+  {
+   "id": "sd15",
+   "name": "Stable Diffusion 1.5",
+   "family": "sd15",
+   "pipeline": "StableDiffusionPipeline",
+   "source": {
+    "hf": "stable-diffusion-v1-5/stable-diffusion-v1-5"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 30,
+    "guidance": 7.5,
+    "width": 512,
+    "height": 512
+   },
+   "vram_mb": 4000,
+   "offload": false,
+   "size_gb": 2.6,
+   "description": "The classic model. Small and fast, 512 pixels.",
+   "min_vram_gb": 4,
+   "gated": false
+  },
+  {
+   "id": "flux-schnell",
+   "name": "FLUX.1 Schnell",
+   "family": "flux",
+   "pipeline": "FluxPipeline",
+   "source": {
+    "hf": "black-forest-labs/FLUX.1-schnell"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 4,
+    "guidance": 0.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 11000,
+   "offload": true,
+   "size_gb": 34.0,
+   "description": "Fast, 4 steps, good at text inside images. Large download.",
+   "min_vram_gb": 12,
+   "gated": true
+  },
+  {
+   "id": "sd-compact",
+   "name": "SD Compact (low memory)",
+   "family": "sd15",
+   "pipeline": "StableDiffusionPipeline",
+   "source": {
+    "hf": "segmind/small-sd",
+    "revision": "f8b087e68071a29bbe85a4b07e6e1e8998d59aa7"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 25,
+    "guidance": 7.0,
+    "width": 512,
+    "height": 512
+   },
+   "vram_mb": 2500,
+   "offload": false,
+   "size_gb": 1.8,
+   "description": "Tiny model for low memory or CPU. Rough but quick.",
+   "min_vram_gb": 4,
+   "gated": false
+  },
+  {
+   "id": "z-image-turbo",
+   "name": "Z-Image Turbo",
+   "family": "zimage",
+   "pipeline": "ZImagePipeline",
+   "source": {
+    "hf": "Tongyi-MAI/Z-Image-Turbo"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 8,
+    "guidance": 0.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 11000,
+   "offload": true,
+   "size_gb": 31.0,
+   "description": "Fast, 8 steps, sharp photos. Good default.",
+   "min_vram_gb": 12,
+   "gated": false
+  },
+  {
+   "id": "flux2-klein-4b",
+   "name": "FLUX.2 klein 4B",
+   "family": "flux2",
+   "pipeline": "Flux2KleinPipeline",
+   "source": {
+    "hf": "black-forest-labs/FLUX.2-klein-4B"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 4,
+    "guidance": 1.0,
+    "width": 1024,
+    "height": 1024
+   },
+   "vram_mb": 11000,
+   "offload": true,
+   "size_gb": 16.0,
+   "description": "Newest FLUX (2026), 4 steps, strong prompt following. Apache license.",
+   "min_vram_gb": 10,
+   "gated": false
+  }
+ ]
+}

@@ -1,0 +1,70 @@
+{
+ "defaults": {
+  "model": "realvis-v5",
+  "width": 1344,
+  "height": 768,
+  "negative": "text, watermark, blurry"
+ },
+ "items": [
+  {
+   "prompt": "an astronaut standing on a red martian ridge at dawn"
+  },
+  {
+   "prompt": "a derelict starship drifting past a ringed gas giant"
+  },
+  {
+   "prompt": "a neon city on a moon with earth rising behind it"
+  },
+  {
+   "prompt": "a lone explorer in a glowing alien forest"
+  },
+  {
+   "prompt": "a massive space station orbiting a blue ice planet"
+  },
+  {
+   "prompt": "two suns setting over a desert colony"
+  },
+  {
+   "prompt": "a cargo freighter docking in an asteroid mine"
+  },
+  {
+   "prompt": "a nebula shaped like a hand reaching for a star"
+  },
+  {
+   "prompt": "a rover crossing a frozen methane lake on titan"
+  },
+  {
+   "prompt": "an orbital elevator rising from a jungle planet"
+  },
+  {
+   "prompt": "a crystal cave on an asteroid lit by a distant pulsar"
+  },
+  {
+   "prompt": "a fleet of solar sail ships leaving jupiter"
+  },
+  {
+   "prompt": "a greenhouse dome on the moon at night"
+  },
+  {
+   "prompt": "a black hole bending starlight behind a research vessel"
+  },
+  {
+   "prompt": "a robot gardener tending plants aboard a generation ship"
+  },
+  {
+   "prompt": "a crashed escape pod in a purple alien swamp"
+  },
+  {
+   "prompt": "astronauts playing baseball in low gravity"
+  },
+  {
+   "prompt": "a floating city in the clouds of venus"
+  },
+  {
+   "prompt": "a comet passing close over an ocean world"
+  },
+  {
+   "prompt": "a quiet observation deck looking out at the milky way"
+  }
+ ]
+}
