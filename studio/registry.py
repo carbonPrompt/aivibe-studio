@@ -13,6 +13,10 @@ FAMILIES = {
     "flux": ("FluxPipeline", 4, 0.0, 1024),
     "flux2": ("Flux2KleinPipeline", 4, 1.0, 1024),
     "zimage": ("ZImagePipeline", 8, 0.0, 1024),
+    "ltx": ("LTXPipeline", 30, 3.0, 768),
+    "wan": ("WanPipeline", 30, 5.0, 832),
+    "cogvideo": ("CogVideoXPipeline", 40, 6.0, 720),
+    "svd": ("StableVideoDiffusionPipeline", 25, 3.0, 1024),
 }
 LICENSES = {"commercial", "conditions", "nc"}
 
@@ -115,7 +119,7 @@ class Registry:
             id = f"{base}-{k}"
         m = ModelEntry(id=id, name=name, family=family, pipeline=pipe, source=source, license=license,
                        defaults=dict(steps=steps, guidance=guidance, width=size, height=size),
-                       offload=family in ("sd3", "flux", "flux2", "zimage"), user=True)
+                       offload=family in ("sd3", "flux", "flux2", "zimage", "ltx", "wan", "cogvideo", "svd"), user=True)
         self._models[id] = m
         self._save_user()
         return m

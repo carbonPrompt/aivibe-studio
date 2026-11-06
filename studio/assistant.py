@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from studio.batch import KEYS, BatchError, parse_batch
 from studio.providers import PROVIDERS, ProviderError
+from studio.video import VIDEO_FAMILIES
 
 log = logging.getLogger("studio.assistant")
 MAX_ITEMS = 50
@@ -29,6 +30,8 @@ def brief(registry, subjects, fallback_model: str | None = None) -> str:
     """The system text: batch rules, the model table and the trained subjects. No tokens, paths or photos."""
     models = []
     for m in registry.all():
+        if m.family in VIDEO_FAMILIES:
+            continue
         d = m.defaults
         models.append(f"{m.id} | {m.name} | {m.family} | installed {'yes' if registry.local_path(m.id) else 'no'} | "
                       f"{d.get('steps')} steps, guidance {d.get('guidance')}, {d.get('width')}x{d.get('height')} | "

@@ -1,7 +1,7 @@
 import json
 import pytest
 from pathlib import Path
-from studio.batch import parse_batch, group_by_model, BatchError, BatchItem
+from studio.batch import parse_batch, group_by_model, BatchError, BatchItem, load_raw_batch, serialize_batch
 from studio.registry import Registry
 
 CATALOG = Path(__file__).parent.parent / "studio" / "catalog.json"
@@ -147,3 +147,37 @@ def test_subject_default_weight_used_when_not_given(reg, tmp_path):
     car = st.create("Car", "car", "car"); st.lora_path(car.id).write_bytes(b"x"); st.set_default_weight(car.id, 1.1)
     (a,) = parse_batch(json.dumps([{"prompt": "the Car", "subjects": ["Car"]}]), "b.json", reg, "realvis-v5", subjects=st)
     assert a.subjects == [(car.id, 1.1)]
+
+
+def test_load_raw_batch_and_serialize_round_trip(reg):
+    raw = load_raw_batch((EXAMPLES / "space.json").read_text(), "space.json")
+    assert raw["defaults"]["model"] == "realvis-v5" and len(raw["items"]) == 20
+    text = serialize_batch(raw, "out.json")
+    reparsed = json.loads(text)
+    assert reparsed["defaults"] == raw["defaults"] and reparsed["items"] == raw["items"]
+    txt_raw = load_raw_batch("# comment\nfirst prompt\nsecond prompt\n", "list.txt")
+    assert txt_raw == {"defaults": {}, "items": [{"prompt": "first prompt"}, {"prompt": "second prompt"}]}
+    assert serialize_batch(txt_raw, "list.txt") == "first prompt\nsecond prompt\n"
+
+
+def test_serialize_batch_cleans_empty_and_preserves_overrides():
+    b = {
+        "defaults": {"model": "realvis-v5", "width": 896, "height": 1152, "seed": -1, "upscale": "4k", "face_fix": True, "negative": ""},
+        "items": [
+            {"name": "p1", "prompt": "  a portrait  ", "seed": -1, "upscale": "", "subjects": [{"name": "Alex", "weight": 0.85}]},
+            {"prompt": "second", "seed": 42, "reference_strength": 0.5},
+        ],
+    }
+    out = json.loads(serialize_batch(b, "b.json"))
+    assert out["defaults"] == {"model": "realvis-v5", "width": 896, "height": 1152, "upscale": "4k"}
+    # item 1 has upscale="" to override default upscale="4k", and subjects with weights
+    assert out["items"][0] == {"name": "p1", "prompt": "a portrait", "upscale": "", "subjects": [{"name": "Alex", "weight": 0.85}]}
+    # item 2 has no reference, so reference_strength is omitted
+    assert out["items"][1] == {"prompt": "second", "seed": 42}
+
+
+
+def test_video_model_rejected_in_picture_batch(reg):
+    with pytest.raises(BatchError) as e:
+        P(json.dumps([{"prompt": "a dog running", "model": "ltx-video"}]), reg)
+    assert any("video model" in p for p in e.value.problems)

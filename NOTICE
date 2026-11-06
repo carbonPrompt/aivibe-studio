@@ -23,12 +23,15 @@ Downloaded during setup (not redistributed here)
 Python 3.12 (PSF License), PyTorch and torchvision (BSD-3-Clause), diffusers, transformers,
 accelerate, peft, safetensors, huggingface_hub (Apache-2.0), pywebview (BSD-3-Clause),
 OpenCV (Apache-2.0), Pillow (MIT-CMU), numpy (BSD-3-Clause), spandrel (MIT), einops (MIT)
+imageio-ffmpeg (BSD-2-Clause), which carries an FFmpeg binary (GPL; https://ffmpeg.org) that the app
+runs as a separate program to save videos,
 and the other packages pinned in installer/requirements.lock.txt, each under its own license.
 
 Downloaded at runtime when the user asks (not redistributed here)
 -----------------------------------------------------------------
 Real-ESRGAN x4plus weights (Comfy-Org/Real-ESRGAN_repackaged), BSD-3-Clause.
 IP-Adapter weights (h94/IP-Adapter), Apache-2.0.
-The image models listed in README.md, each under the license on its Hugging Face model card
+The image and video models listed in README.md, each under the license on its Hugging Face model card
 (CreativeML OpenRAIL-M, OpenRAIL++, the Stability AI Community License, the Playground v2.5
-license, Apache-2.0 and others). The user accepts each model's license when downloading it.
+license, the LTX-Video Open Weights License, Apache-2.0 and others). The user accepts each model's
+license when downloading it.

@@ -20,7 +20,8 @@
 
   <nav class="rail">
     <button class="on" id="navCreate" title="Create">✦<span>Create</span></button>
-    <button id="navBatch" title="Load a batch file">☰<span>Batch</span></button>
+    <button id="navVideo" title="Generate videos from text or images">▶<span>Video</span></button>
+    <button id="navBatch" title="Batch maker: build, open, edit, save and run batches">☰<span id="navBatchLabel">Batch</span></button>
     <button id="navFiles" title="Open the output folder">▤<span>Output</span></button>
     <button id="navModels" title="Models">◈<span>Models</span></button>
     <button id="navStorage" title="Model storage">⛁<span>Storage</span></button>
@@ -76,7 +77,7 @@
     <div class="col">
     <section class="studio" data-panel="studio">
       <div class="summary"><span class="grip" title="Drag to move the picture area">⋮⋮</span><span id="summary"></span><span class="spacer"></span><span id="lastInfo"></span></div>
-      <div class="preview" id="preview"><div class="empty" id="previewEmpty">Your images appear here.<br><small>Write a prompt, then Generate (Ctrl+Enter).</small></div><img id="previewImg" alt="" hidden><span class="caption" id="previewCaption" hidden></span><button class="prevup" id="btnPreviewUp" hidden>Upscale this</button></div>
+      <div class="preview" id="preview"><div class="empty" id="previewEmpty">Your images appear here.<br><small>Write a prompt, then Generate (Ctrl+Enter).</small></div><img id="previewImg" alt="" hidden><video id="previewVideo" controls loop autoplay muted playsinline hidden></video><span class="caption" id="previewCaption" hidden></span><button class="prevanim" id="btnPreviewAnim" hidden title="Open this picture in the Video tab to animate it">Animate this</button><button class="prevup" id="btnPreviewUp" hidden>Upscale this</button></div>
       <div>
         <div class="prompts">
           <section class="panel" data-fixed="prompt">
@@ -93,6 +94,7 @@
         <div class="go" style="margin-top:var(--gap)">
           <input id="name" placeholder="Name (optional, used in the file name)" style="max-width:320px">
           <span class="spacer"></span><kbd>Ctrl+Enter</kbd>
+          <button id="btnAddBatch" title="Add the current prompt and settings to the Batch Maker">+ Batch</button>
           <button class="primary" id="btnGenerate">Generate</button>
         </div>
       </div>
@@ -135,6 +137,216 @@
     </div>
   </main>
 
+  <main class="work batchwork" id="batchMaker" hidden>
+    <div class="col bm-left">
+      <section class="panel">
+        <h3>Batch file</h3>
+        <div class="desc" id="bmFileInfo">New unsaved batch</div>
+        <div class="row">
+          <label style="white-space:nowrap">Batch name</label>
+          <input id="bmName" placeholder="e.g. space-scifi (used for folder)" value="my-batch">
+        </div>
+        <div class="row">
+          <button id="bmNew" title="Start a fresh blank batch">New</button>
+          <button id="bmOpen" style="flex:1" title="Open an existing .json or .txt batch file to view and modify">Open file…</button>
+          <button id="bmQuickRun" title="Pick a .json or .txt batch file and run it right away">Quick run…</button>
+        </div>
+        <div class="row">
+          <button id="bmSave" style="flex:1" title="Save changes to the current batch file (Ctrl+S)">Save</button>
+          <button id="bmSaveAs" style="flex:1" title="Save batch to a new .json or .txt file">Save as…</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>Shared defaults <button class="ghost" id="bmFromStudio" style="margin-left:auto" title="Copy current settings from the Create tab into shared defaults">From Create</button><button class="ghost" id="bmClearDefaults" style="margin-left:6px" title="Clear shared defaults">Clear</button></h3>
+        <div class="desc">Applied to every item unless overridden on that item.</div>
+        <label>Model</label>
+        <select id="bmDefModel"></select>
+        <div class="row" style="margin-top:8px">
+          <label style="flex:1">Canvas (W × H)</label>
+          <div class="layoutbtns" id="bmDefAspects">
+            <button class="tiny" data-wh="1024x1024" title="1024 × 1024 (1:1)">1:1</button>
+            <button class="tiny" data-wh="896x1152" title="896 × 1152 (4:5 portrait)">4:5</button>
+            <button class="tiny" data-wh="1344x768" title="1344 × 768 (16:9 wide)">16:9</button>
+            <button class="tiny" data-wh="768x1344" title="768 × 1344 (9:16 vertical)">9:16</button>
+          </div>
+        </div>
+        <div class="row">
+          <input id="bmDefWidth" type="number" step="8" min="256" max="2048" placeholder="model width">
+          <span>×</span>
+          <input id="bmDefHeight" type="number" step="8" min="256" max="2048" placeholder="model height">
+        </div>
+        <div class="row">
+          <div style="flex:1"><label>Images / item</label><input id="bmDefCount" type="number" min="1" max="8" placeholder="1"></div>
+          <div style="flex:1"><label>Steps</label><input id="bmDefSteps" type="number" min="1" max="150" placeholder="model"></div>
+          <div style="flex:1"><label>Guidance</label><input id="bmDefGuidance" type="number" min="0" max="30" step="0.5" placeholder="model"></div>
+        </div>
+        <div class="row">
+          <div style="flex:1"><label>Seed</label><input id="bmDefSeed" type="number" placeholder="random"></div>
+          <div style="flex:1"><label>Upscale</label>
+            <select id="bmDefUpscale">
+              <option value="">None</option>
+              <option value="2x">2x</option>
+              <option value="4x">4x</option>
+              <option value="1080p">1080p</option>
+              <option value="4k">4K</option>
+              <option value="custom">Custom px…</option>
+            </select>
+          </div>
+          <div id="bmDefUpPxWrap" style="width:86px" hidden><label>Long edge</label><input id="bmDefUpPx" type="number" min="512" max="8192" step="8" placeholder="2400"></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label style="flex:1">Shared negative prompt</label>
+          <select id="bmDefNegPreset" style="width:130px"><option value="">Presets…</option></select>
+        </div>
+        <textarea id="bmDefNegative" rows="3" placeholder="Things to avoid across all items (optional)"></textarea>
+        <div style="margin-top:8px">
+          <label>Shared subjects (up to 3, SDXL)</label>
+          <div class="chips" id="bmDefSubChips" style="margin-top:4px"></div>
+          <div class="stack" id="bmDefSubPicks" style="margin-top:6px"></div>
+          <label style="display:block;margin-top:6px"><input id="bmDefFaceFix" type="checkbox" checked style="width:auto"> Face fix</label>
+        </div>
+        <div style="margin-top:8px">
+          <label>Shared reference image (SDXL)</label>
+          <div class="row" style="margin-top:4px">
+            <div class="refthumb" id="bmDefRefThumb" style="width:52px;height:52px">none</div>
+            <div style="flex:1" class="stack">
+              <input id="bmDefRefPath" placeholder="Local image path (optional)">
+              <div class="row">
+                <button id="bmDefPickRef" style="flex:1">Pick…</button>
+                <button id="bmDefClearRef">Clear</button>
+                <input id="bmDefRefStrength" type="number" min="0" max="1" step="0.05" value="0.5" style="width:68px" title="Reference strength (0 to 1)">
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="col wide bm-right">
+      <section class="panel batchmain">
+        <div class="bm-toolbar">
+          <h3>Batch items <span class="counter" id="bmSummary" style="margin-left:10px;text-transform:none;letter-spacing:0">1 item · 1 picture</span></h3>
+          <span class="spacer"></span>
+          <button id="bmAddItem">+ Add item</button>
+          <button id="bmBulkToggle" class="ghost" title="Paste multiple prompts at once (one per line)">+ Paste lines</button>
+          <button id="bmExpandAll" class="ghost" title="Show or hide per-item override options on all items">Options ▾</button>
+          <button id="bmJsonToggle" class="ghost" title="View or edit the raw batch JSON">Edit as JSON</button>
+        </div>
+        <ul class="problems" id="bmProblems"></ul>
+        <div class="bm-bulk" id="bmBulkBox" hidden>
+          <div class="desc">Paste or type one prompt per line (lines starting with # are skipped):</div>
+          <textarea id="bmBulkText" rows="5" placeholder="an astronaut standing on a red martian ridge at dawn&#10;a derelict starship drifting past a ringed gas giant"></textarea>
+          <div class="row" style="justify-content:flex-end">
+            <button id="bmBulkCancel">Cancel</button>
+            <button class="primary" id="bmBulkAdd">Add prompts</button>
+          </div>
+        </div>
+        <div class="bm-items" id="bmItems"></div>
+        <textarea class="bm-json" id="bmJsonText" hidden spellcheck="false"></textarea>
+        <div class="go bm-footer">
+          <span class="desc" id="bmStatus" style="flex:1"></span>
+          <button id="bmCheck" title="Validate every item and setting without starting the batch">Check batch</button>
+          <button id="bmSaveRun" title="Save to file and start running the batch">Save &amp; Run</button>
+          <button class="primary" id="bmRun">Run batch</button>
+        </div>
+      </section>
+    </div>
+    <datalist id="bmSizePresets">
+      <option value="1024x1024">1024x1024 (1:1 square)</option>
+      <option value="896x1152">896x1152 (4:5 portrait)</option>
+      <option value="1152x896">1152x896 (5:4 landscape)</option>
+      <option value="1344x768">1344x768 (16:9 widescreen)</option>
+      <option value="768x1344">768x1344 (9:16 vertical)</option>
+      <option value="1216x832">1216x832 (3:2 photo)</option>
+      <option value="832x1216">832x1216 (2:3 portrait)</option>
+      <option value="512x512">512x512 (SD 1.5 square)</option>
+    </datalist>
+  </main>
+
+  <main class="work videowork" id="videoMaker" hidden>
+    <div class="col">
+      <section class="panel">
+        <h3>Video model</h3>
+        <select id="vidModel"></select>
+        <div class="desc" id="vidModelDesc"></div>
+        <div class="row"><span class="tag" id="vidModelMode"></span><span class="tag" id="vidModelLicense"></span><span class="tag" id="vidModelState"></span></div>
+        <div class="row"><button id="vidBtnGuide" style="flex:1">Model guide</button><button id="vidBtnModels" style="flex:1">Manage models</button></div>
+      </section>
+      <section class="panel" id="vidImgPanel">
+        <h3>Starting image</h3>
+        <div class="desc" id="vidImgNote">Optional for LTX-Video; required for SVD-XT.</div>
+        <div class="row">
+          <div class="refthumb" id="vidImgThumb" style="width:72px;height:72px">none</div>
+          <div style="flex:1" class="stack">
+            <button id="vidPickImg">Pick image…</button>
+            <button id="vidUseCurrent" title="Use the currently selected picture from Recent">Use selected picture</button>
+            <button id="vidClearImg">Clear</button>
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <h3>Canvas &amp; duration</h3>
+        <div class="seg" id="vidAspect">
+          <button class="on" data-va="16:9">16:9</button>
+          <button data-va="9:16">9:16</button>
+          <button data-va="1:1">1:1</button>
+        </div>
+        <div class="row">
+          <input id="vidWidth" type="number" step="16" min="256" max="1280" value="704">
+          <span>×</span>
+          <input id="vidHeight" type="number" step="16" min="256" max="1280" value="480">
+        </div>
+        <div class="row">
+          <div style="flex:1"><label>Frames</label><input id="vidFrames" type="number" min="9" max="161" step="4" value="49"></div>
+          <div style="flex:1"><label>FPS</label><input id="vidFps" type="number" min="4" max="60" value="24"></div>
+        </div>
+        <div class="desc" id="vidDurationInfo">49 frames at 24 fps (~2.0 s clip)</div>
+        <div class="row"><button id="vidRecommended" style="width:100%">Recommended settings</button></div>
+      </section>
+      <section class="panel">
+        <h3>Quality &amp; seed</h3>
+        <label>Thinking (steps)</label>
+        <div class="slider"><input id="vidSteps" type="range" min="1" max="80" value="30"><output id="vidStepsOut">30</output></div>
+        <label>Guidance</label>
+        <div class="slider"><input id="vidGuidance" type="range" min="0" max="15" step="0.5" value="3.0"><output id="vidGuidanceOut">3.0</output></div>
+        <div class="row" style="margin-top:4px">
+          <label style="flex:1"><input id="vidRandomSeed" type="checkbox" checked style="width:auto"> Random seed</label>
+          <input id="vidSeed" type="number" value="-1" style="width:120px" disabled>
+        </div>
+      </section>
+    </div>
+
+    <div class="col wide">
+      <section class="studio">
+        <div class="summary"><span id="vidSummary"></span><span class="spacer"></span><span id="vidLastInfo"></span></div>
+        <div class="preview" id="vidPreview">
+          <div class="empty" id="vidPreviewEmpty">Your videos appear here.<br><small>Write a prompt or pick a starting image, then Generate video (Ctrl+Enter).</small></div>
+          <video id="vidPreviewVideo" controls loop autoplay muted playsinline hidden></video>
+          <span class="caption" id="vidPreviewCaption" hidden></span>
+        </div>
+        <div>
+          <div class="prompts">
+            <section class="panel">
+              <h3>Motion / scene prompt <span class="counter" id="vidPromptCount">0 / 75 words</span><button class="ghost" id="vidClearPrompt" style="margin-left:auto">Clear</button></h3>
+              <textarea id="vidPrompt" placeholder="Describe the scene and camera motion (e.g. slow drone shot over misty pine forest at sunrise, golden light)."></textarea>
+            </section>
+            <section class="panel">
+              <h3>Negative prompt <button class="ghost" id="vidClearNeg" style="margin-left:auto">Clear</button></h3>
+              <textarea id="vidNegative">low quality, worst quality, deformed, distorted, watermark, jittery</textarea>
+              <div class="row"><select id="vidNegPreset"><option value="">Presets…</option></select></div>
+            </section>
+          </div>
+          <div class="go" style="margin-top:var(--gap)">
+            <input id="vidName" placeholder="Name (optional, used in the .mp4 file name)" style="max-width:320px">
+            <span class="spacer"></span><kbd>Ctrl+Enter</kbd>
+            <button class="primary" id="btnGenerateVideo">Generate video</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
   <div class="dock" id="dock"><div class="gallery" id="gallery"></div></div>
 </div>
 <div class="modal" id="modal" hidden><div class="sheet"><div class="row"><h2 id="modalTitle"></h2><span class="spacer"></span><button id="modalClose">Close</button></div><div id="modalBody"></div></div></div>
@@ -153,7 +365,7 @@
   <textarea id="reviewText" rows="18" hidden spellcheck="false"></textarea>
   <div class="row"><button id="reviewAdd">Add line</button><button class="ghost" id="reviewTextToggle">Edit as text</button></div>
   <div class="row"><input id="reviewInstruction" placeholder="Change it, e.g. make them all night scenes"><button id="reviewRevise">Revise</button></div>
-  <div class="row" style="justify-content:flex-end"><span class="desc" id="reviewStatus" style="flex:1"></span><button id="reviewClose">Close</button><button class="primary" id="reviewGo">Go</button></div>
+  <div class="row" style="justify-content:flex-end"><span class="desc" id="reviewStatus" style="flex:1"></span><button id="reviewToBatch" title="Open this batch in the Batch Maker to edit defaults or save to a file">Open in Batch Maker</button><button id="reviewClose">Close</button><button class="primary" id="reviewGo">Go</button></div>
 </div></div>
 <div class="busy" id="busy" hidden><div class="sheet busysheet">
   <h2 id="busyTitle">Working</h2>

@@ -11,11 +11,13 @@ from PIL import Image
 
 from studio.gpu import other_job_running
 from studio.upscale import upscale_image
+from studio.video import (VIDEO_FAMILIES, VIDEO_I2V_FAMILIES, VIDEO_T2V_FAMILIES, VideoRequest, snap_video_params,
+                          to_pil_frames)
 
 UPSCALER_REPO, UPSCALER_FILE = "Comfy-Org/Real-ESRGAN_repackaged", "RealESRGAN_x4plus.safetensors"   # BSD-3-Clause
 
-NEGATIVE_FAMILIES = {"sd15", "sdxl", "playground", "sd3"}   # FLUX and Z-Image pipelines take no negative prompt
-BF16_FAMILIES = {"sd3", "flux", "flux2", "zimage"}
+NEGATIVE_FAMILIES = {"sd15", "sdxl", "playground", "sd3", "ltx", "wan", "cogvideo"}   # FLUX and Z-Image pipelines take no negative prompt
+BF16_FAMILIES = {"sd3", "flux", "flux2", "zimage", "ltx", "wan"}
 LIKENESS_FAMILIES = {"sdxl"}        # subject LoRAs are trained on RealVisXL (SDXL); IP-Adapter Plus is the SDXL one
 MAX_SUBJECTS = 3
 log = logging.getLogger("studio.engine")
@@ -177,12 +179,79 @@ class Runner:
             kw["ip_adapter_image"] = ref
         return self.pipe(**kw).images[0]
 
+    def generate_video(self, req: VideoRequest, seed: int, on_step) -> list[Image.Image]:
+        import torch
+        g = torch.Generator("cpu").manual_seed(seed)
+        fam = self.entry.family
+        w, h, frames, fps = snap_video_params(fam, req.width, req.height, req.frames, req.fps)
+
+        def cb(pipe, i, t, kw):
+            on_step(i + 1, req.steps)
+            return kw
+
+        if fam == "ltx":
+            if req.image:
+                from diffusers import LTXImageToVideoPipeline
+                if getattr(self, "_ltx_i2v", None) is None:
+                    self._ltx_i2v = LTXImageToVideoPipeline.from_pipe(self.pipe)
+                img = Image.open(req.image).convert("RGB").resize((w, h), Image.LANCZOS)
+                kw = dict(image=img, prompt=req.prompt, width=w, height=h, num_frames=frames, frame_rate=fps,
+                          num_inference_steps=req.steps, guidance_scale=req.guidance, generator=g,
+                          callback_on_step_end=cb)
+                if req.negative:
+                    kw["negative_prompt"] = req.negative
+                out = self._ltx_i2v(**kw)
+            else:
+                kw = dict(prompt=req.prompt, width=w, height=h, num_frames=frames, frame_rate=fps,
+                          num_inference_steps=req.steps, guidance_scale=req.guidance, generator=g,
+                          callback_on_step_end=cb)
+                if req.negative:
+                    kw["negative_prompt"] = req.negative
+                out = self.pipe(**kw)
+        elif fam == "wan":
+            kw = dict(prompt=req.prompt, width=w, height=h, num_frames=frames, num_inference_steps=req.steps,
+                      guidance_scale=req.guidance, generator=g, callback_on_step_end=cb)
+            if req.negative:
+                kw["negative_prompt"] = req.negative
+            out = self.pipe(**kw)
+        elif fam == "cogvideo":
+            kw = dict(prompt=req.prompt, width=w, height=h, num_frames=frames, num_inference_steps=req.steps,
+                      guidance_scale=req.guidance, use_dynamic_cfg=True, generator=g, callback_on_step_end=cb)
+            if req.negative:
+                kw["negative_prompt"] = req.negative
+            out = self.pipe(**kw)
+        elif fam == "svd":
+            if not req.image:
+                raise ValueError("Stable Video Diffusion requires a starting image")
+            img = Image.open(req.image).convert("RGB").resize((w, h), Image.LANCZOS)
+            kw = dict(image=img, width=w, height=h, num_frames=frames, fps=fps, num_inference_steps=req.steps,
+                      max_guidance_scale=req.guidance, decode_chunk_size=4, generator=g, callback_on_step_end=cb)
+            out = self.pipe(**kw)
+        else:
+            raise ValueError(f"unsupported video family: {fam}")
+        raw = getattr(out, "frames", None)
+        if raw is None:
+            raw = getattr(out, "images", out)
+        return to_pil_frames(raw)
+
 
 def _variant(path: Path):
     """Some model folders store only *.fp16.safetensors, which diffusers only loads when asked for variant fp16."""
     if path is None or not path.is_dir():
         return None
     return "fp16" if any(path.glob("*/*.fp16.safetensors")) else None
+
+
+def enable_vae_savers(pipe) -> None:
+    """VAE tiling and slicing where the VAE has them; some (SVD's temporal decoder) define the methods but raise."""
+    vae = getattr(pipe, "vae", None)
+    if vae is None:
+        return
+    for saver in ("enable_tiling", "enable_slicing"):
+        try:
+            getattr(vae, saver)()
+        except (AttributeError, NotImplementedError):
+            pass
 
 
 def load_runner(entry, path: Path | None, device: str = "cuda") -> Runner:
@@ -204,8 +273,12 @@ def load_runner(entry, path: Path | None, device: str = "cuda") -> Runner:
     else:
         src = str(path) if path else entry.source["hf"]
         pipe = cls.from_pretrained(src, dtype=dtype, variant=_variant(path))
+    if entry.family in VIDEO_FAMILIES:
+        enable_vae_savers(pipe)
     if device == "cpu":
         pipe.to("cpu")
+    elif entry.offload and entry.family in VIDEO_FAMILIES:
+        pipe.enable_model_cpu_offload()
     elif entry.offload:
         # Whole-model cpu offload spills into Windows shared memory on 12 GB (Z-Image: 40 s/step, 2026-10-15).
         # Stream the big modules through the card in blocks instead; small ones stay resident.
@@ -463,3 +536,33 @@ class DiffusersEngine:
             log.info("click-to-fix redraw took %.1f s", time.time() - t0)
             self._last = self.clock()
             return out
+
+    def generate_video(self, req: VideoRequest, on_step, cancel: threading.Event) -> list[Image.Image] | None:
+        """Render one video clip (list of PIL frames). Returns None if cancelled."""
+        family = self.registry.get(req.model_id).family
+        if family not in VIDEO_FAMILIES:
+            raise ValueError(f"{req.model_id} is not a video model")
+        if req.image and family not in VIDEO_I2V_FAMILIES:
+            raise ValueError(f"{req.model_id} does not support starting images (use LTX-Video or SVD-XT)")
+        if not req.image and family not in VIDEO_T2V_FAMILIES:
+            raise ValueError(f"{req.model_id} requires a starting image")
+        with self._lock:
+            if not self._ensure(req.model_id, cancel):
+                return None
+
+            def step(i, n):
+                if cancel.is_set():
+                    log.info("cancel seen at video step %d of %d", i, n)
+                    raise Cancelled()
+                self.marker.heartbeat()
+                on_step(i, n)
+
+            t0 = time.time()
+            try:
+                frames = self._pipe.generate_video(req, req.seed, step)
+                log.info("video (%d frames) drawn in %.1f s (seed %d)", len(frames), time.time() - t0, req.seed)
+            except Cancelled:
+                log.info("video generation stopped by Cancel; nothing saved")
+                return None
+            self._last = self.clock()
+            return frames

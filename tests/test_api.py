@@ -17,9 +17,10 @@ CATALOG = Path(__file__).parent.parent / "studio" / "catalog.json"
 
 
 class FakeQueue:
-    def __init__(self): self.singles, self.batches, self.cancelled = [], [], 0
+    def __init__(self): self.singles, self.batches, self.videos, self.cancelled = [], [], [], 0
     def submit_single(self, req, subject): self.singles.append((req, subject)); return "job1"
     def submit_batch(self, items, batch_file): self.batches.append((items, batch_file)); return "job2"
+    def submit_video(self, req, subject): self.videos.append((req, subject)); return "job3"
     def cancel(self): self.cancelled += 1
     def events(self, since): return []
     def state(self): return {"running": False, "current": None, "done": 0, "total": 0, "pending": 0}
@@ -88,6 +89,52 @@ def test_load_batch_with_undownloaded_model_reports_it(api, tmp_path):
     f = tmp_path / "b.json"; f.write_text('[{"prompt": "a", "model": "flux-schnell"}]')
     r = api.load_batch(str(f))
     assert r["needs_download"][0]["id"] == "flux-schnell" and not api._queue.batches
+
+
+def test_batch_maker_open_modify_save_check_and_run(api, tmp_path):
+    src = tmp_path / "my-set.json"
+    src.write_text(json.dumps({
+        "defaults": {"model": "realvis-v5", "width": 1344, "height": 768, "count": 2},
+        "items": [{"name": "one", "prompt": "first scene"}, {"prompt": "second scene", "count": 1}],
+    }))
+    opened = api.open_batch_file(str(src))
+    assert opened["name"] == "my-set" and opened["filename"] == "my-set.json" and opened["problems"] == []
+    batch = opened["batch"]
+    assert batch["defaults"]["width"] == 1344 and len(batch["items"]) == 2
+
+    # modify existing batch in memory, check, save to new file, and run
+    batch["items"].append({"name": "three", "prompt": "third scene", "upscale": "1080p"})
+    chk = api.check_batch(batch)
+    assert chk == {"ok": True, "problems": [], "count": 3, "pictures": 5}
+
+    dest = tmp_path / "saved-set"
+    saved = api.save_batch_file(batch, str(dest))
+    assert saved["ok"] is True and saved["filename"] == "saved-set.json" and Path(saved["path"]).exists()
+    reopened = api.open_batch_file(saved["path"])
+    assert len(reopened["batch"]["items"]) == 3 and reopened["batch"]["items"][2]["upscale"] == "1080p"
+
+    ran = api.run_batch(batch, "saved-set")
+    assert ran == {"job": "job2", "count": 3, "pictures": 5, "name": "saved-set.json"}
+    items, bfile = api._queue.batches[-1]
+    assert bfile == "saved-set.json" and len(items) == 3 and items[2].upscale == "1080p"
+
+
+def test_batch_maker_open_file_with_validation_issue_still_loads_for_editing(api, tmp_path):
+    f = tmp_path / "broken.json"
+    f.write_text(json.dumps({"defaults": {"width": 1003}, "items": [{"prompt": "a fox"}]}))
+    opened = api.open_batch_file(str(f))
+    assert opened["batch"]["items"] == [{"prompt": "a fox"}]
+    assert any("multiple of 8" in p for p in opened["problems"])
+    assert api.run_batch(opened["batch"], "broken")["problems"] and not api._queue.batches
+
+
+def test_batch_maker_run_checks_model_download_and_txt_save(api, tmp_path):
+    b = {"defaults": {"model": "flux-schnell"}, "items": [{"prompt": "a cat"}, {"prompt": "a dog"}]}
+    r = api.run_batch(b, "cats")
+    assert r["needs_download"][0]["id"] == "flux-schnell" and not api._queue.batches
+    txt = tmp_path / "prompts.txt"
+    s = api.save_batch_file(b, str(txt))
+    assert s["ok"] is True and txt.read_text(encoding="utf-8") == "a cat\na dog\n"
 
 
 def _img(folder, stem, seed=5, when="2026-10-18T16:52:00"):
@@ -786,3 +833,43 @@ def test_download_passes_the_pinned_revision(tmp_path, monkeypatch):
     a = _dl_api(tmp_path, monkeypatch, fetch=f)
     a._download(a._registry.get("sd-compact")); a._download(a._registry.get("realvis-v5"))
     assert re.fullmatch(r"[0-9a-f]{40}", f.revisions[0] or "") and f.revisions[1] is None
+
+
+def test_models_include_video_capabilities(api):
+    by_id = {m["id"]: m for m in api.models()}
+    assert by_id["realvis-v5"]["kind"] == "image"
+    assert by_id["ltx-video"]["kind"] == "video" and by_id["ltx-video"]["t2v"] and by_id["ltx-video"]["i2v"]
+    assert by_id["wan-t2v-1.3b"]["kind"] == "video" and by_id["wan-t2v-1.3b"]["t2v"] and not by_id["wan-t2v-1.3b"]["i2v"]
+    assert by_id["svd-xt"]["kind"] == "video" and by_id["svd-xt"]["i2v"] and not by_id["svd-xt"]["t2v"]
+
+
+def test_generate_video_validates_and_submits(api, tmp_path):
+    # Mark ltx-video and svd-xt as downloaded
+    for mid in ("ltx-video", "svd-xt", "wan-t2v-1.3b"):
+        snap = api._registry.hf_repo_dir(mid) / "snapshots" / "1"
+        snap.mkdir(parents=True)
+        (snap / "model_index.json").write_text("{}")
+
+    # Image model rejected
+    assert "image model" in api.generate_video({"model": "realvis-v5", "prompt": "a cat"})["error"]
+    # Missing prompt on T2V model
+    assert "prompt" in api.generate_video({"model": "ltx-video", "prompt": ""})["error"]
+    # Missing image on SVD-XT
+    assert "starting image" in api.generate_video({"model": "svd-xt", "prompt": ""})["error"]
+
+    # Valid T2V submission with parameter snapping
+    r = api.generate_video({"model": "ltx-video", "prompt": "a drone flying over mountains", "width": 700, "height": 470, "frames": 50, "fps": 24})
+    assert r["job"] == "job3" and (r["width"], r["height"], r["frames"]) == (704, 480, 49)
+    req, subj = api._queue.videos[-1]
+    assert req.model_id == "ltx-video" and subj == "drone-flying-mountains"
+
+    # Valid I2V submission on SVD-XT
+    img = tmp_path / "start.png"
+    Image.new("RGB", (64, 64), "blue").save(img)
+    r2 = api.generate_video({"model": "svd-xt", "prompt": "", "image": str(img), "width": 1024, "height": 576, "frames": 25, "fps": 7})
+    assert r2["job"] == "job3"
+    req2, subj2 = api._queue.videos[-1]
+    assert req2.image == str(img) and subj2 == "start"
+
+    # Starting image rejected on T2V-only model (Wan)
+    assert "starting images" in api.generate_video({"model": "wan-t2v-1.3b", "prompt": "a wave", "image": str(img)})["error"]

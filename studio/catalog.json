@@ -276,6 +276,131 @@
    "description": "Newest FLUX (2026), 4 steps, strong prompt following. Apache license.",
    "min_vram_gb": 10,
    "gated": false
+  },
+  {
+   "id": "ltx-video",
+   "name": "LTX-Video 2B",
+   "family": "ltx",
+   "pipeline": "LTXPipeline",
+   "source": {
+    "hf": "Lightricks/LTX-Video"
+   },
+   "app_folder_prefix": null,
+   "license": "conditions",
+   "defaults": {
+    "steps": 30,
+    "guidance": 3.0,
+    "width": 768,
+    "height": 512,
+    "frames": 81,
+    "fps": 24
+   },
+   "vram_mb": 9000,
+   "offload": true,
+   "size_gb": 28.4,
+   "description": "Fast text-to-video and image-to-video (768x512, 24 fps). LTX-Video Open Weights License: companies with $10M+ yearly revenue need a paid license.",
+   "min_vram_gb": 12,
+   "gated": false
+  },
+  {
+   "id": "wan-t2v-1.3b",
+   "name": "Wan 2.1 Video 1.3B",
+   "family": "wan",
+   "pipeline": "WanPipeline",
+   "source": {
+    "hf": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 30,
+    "guidance": 5.0,
+    "width": 832,
+    "height": 480,
+    "frames": 81,
+    "fps": 16
+   },
+   "vram_mb": 8500,
+   "offload": true,
+   "size_gb": 28.9,
+   "description": "High-quality text-to-video (832x480, 16 fps) with realistic motion. Apache 2.0.",
+   "min_vram_gb": 12,
+   "gated": false
+  },
+  {
+   "id": "cogvideox-2b",
+   "name": "CogVideoX 2B",
+   "family": "cogvideo",
+   "pipeline": "CogVideoXPipeline",
+   "source": {
+    "hf": "THUDM/CogVideoX-2b"
+   },
+   "app_folder_prefix": null,
+   "license": "commercial",
+   "defaults": {
+    "steps": 40,
+    "guidance": 6.0,
+    "width": 720,
+    "height": 480,
+    "frames": 49,
+    "fps": 8
+   },
+   "vram_mb": 9500,
+   "offload": true,
+   "size_gb": 13.8,
+   "description": "Compact 2B text-to-video model (720x480, 49 frames). Smaller download, Apache 2.0.",
+   "min_vram_gb": 12,
+   "gated": false
+  },
+  {
+   "id": "svd-xt",
+   "name": "Stable Video Diffusion XT",
+   "family": "svd",
+   "pipeline": "StableVideoDiffusionPipeline",
+   "source": {
+    "hf": "stabilityai/stable-video-diffusion-img2vid-xt"
+   },
+   "app_folder_prefix": null,
+   "license": "conditions",
+   "defaults": {
+    "steps": 25,
+    "guidance": 3.0,
+    "width": 1024,
+    "height": 576,
+    "frames": 25,
+    "fps": 7
+   },
+   "vram_mb": 8500,
+   "offload": true,
+   "size_gb": 4.5,
+   "description": "Image-to-video only (4.5 GB download). Animates any still picture into a 25-frame clip.",
+   "min_vram_gb": 12,
+   "gated": false
+  },
+  {
+   "id": "svd-xt-1-1",
+   "name": "Stable Video Diffusion XT 1.1",
+   "family": "svd",
+   "pipeline": "StableVideoDiffusionPipeline",
+   "source": {
+    "hf": "stabilityai/stable-video-diffusion-img2vid-xt-1-1"
+   },
+   "app_folder_prefix": null,
+   "license": "conditions",
+   "defaults": {
+    "steps": 25,
+    "guidance": 3.0,
+    "width": 1024,
+    "height": 576,
+    "frames": 25,
+    "fps": 7
+   },
+   "vram_mb": 8500,
+   "offload": true,
+   "size_gb": 4.5,
+   "description": "Refined SVD XT 1.1 image-to-video model (4.5 GB). Needs a free Hugging Face token.",
+   "min_vram_gb": 12,
+   "gated": true
   }
  ]
 }

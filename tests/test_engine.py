@@ -323,3 +323,18 @@ def test_engine_no_jobs_root_never_waits(tmp_path, monkeypatch):
     monkeypatch.setattr(e, "other_job_running", lambda root: (_ for _ in ()).throw(AssertionError("checked")))
     eng = DiffusersEngine(reg, FakeMarker(), None, loader=lambda entry, path, device: FakePipe(entry))
     assert eng._wait_for_other_jobs(threading.Event()) is True
+
+
+def test_vae_savers_skip_vae_without_tiling():
+    from types import SimpleNamespace
+    from studio.engine import enable_vae_savers
+    calls = []
+
+    def no_tiling():
+        raise NotImplementedError("Tiling doesn't seem to be implemented for AutoencoderKLTemporalDecoder.")
+
+    enable_vae_savers(SimpleNamespace(vae=SimpleNamespace(enable_tiling=no_tiling,
+                                                          enable_slicing=lambda: calls.append("slice"))))
+    assert calls == ["slice"]
+    enable_vae_savers(SimpleNamespace(vae=None))
+    enable_vae_savers(SimpleNamespace(vae=SimpleNamespace()))

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from studio.naming import slugify, subject_from_prompt
 from studio.upscale import parse_choice
+from studio.video import VIDEO_FAMILIES
 
 KEYS = {"prompt", "name", "negative", "model", "width", "height", "count", "seed", "steps", "guidance", "upscale",
         "subjects", "reference", "reference_strength", "face_fix"}
@@ -128,9 +129,12 @@ def parse_batch(text: str, filename: str, registry, fallback_model: str, subject
             problems.append(f"item {n}: missing prompt"); continue
         model_id = v.get("model") or fallback_model
         try:
-            md = registry.get(model_id).defaults
+            m = registry.get(model_id)
         except KeyError:
             problems.append(f"item {n}: unknown model {model_id!r}"); continue
+        if m.family in VIDEO_FAMILIES:
+            problems.append(f"item {n}: {m.name} is a video model; make videos in the Video tab"); continue
+        md = m.defaults
         try:
             width, height = int(v.get("width", md["width"])), int(v.get("height", md["height"]))
             count = int(v.get("count", 1))
@@ -177,3 +181,78 @@ def group_by_model(items: list[BatchItem]) -> list[tuple[str, list[BatchItem]]]:
     for i in items:
         groups.setdefault(i.model_id, []).append(i)
     return list(groups.items())
+
+
+DEFAULT_KEYS_ORDER = (
+    "model", "width", "height", "count", "seed", "steps", "guidance", "upscale",
+    "subjects", "negative", "reference", "reference_strength", "face_fix",
+)
+ITEM_KEYS_ORDER = (
+    "name", "prompt", "negative", "model", "width", "height", "count", "seed",
+    "steps", "guidance", "upscale", "subjects", "reference", "reference_strength", "face_fix",
+)
+
+
+def load_raw_batch(text: str, filename: str) -> dict:
+    """Read a .json or .txt batch into {'defaults': {...}, 'items': [{...}, ...]} for the Batch Maker UI."""
+    defaults, raw = _raw_items(text, filename)
+    if not isinstance(defaults, dict):
+        raise BatchError(["defaults must be an object of shared settings"])
+    items = []
+    for d in raw:
+        if isinstance(d, dict):
+            items.append(dict(d))
+        elif isinstance(d, str) and d.strip():
+            items.append({"prompt": d.strip()})
+        else:
+            items.append({"prompt": ""})
+    return {"defaults": dict(defaults), "items": items}
+
+
+def _clean_dict(d: dict, order: tuple[str, ...], is_item: bool = False, has_default_seed: bool = False,
+                has_default_upscale: bool = False) -> dict:
+    if not isinstance(d, dict):
+        return {"prompt": ""} if is_item else {}
+    out = {}
+    keys = [k for k in order if k in d] + [k for k in d if k not in order and k in KEYS]
+    has_ref = bool(str(d.get("reference") or "").strip())
+    for k in keys:
+        if not is_item and k in ("prompt", "name"):
+            continue
+        v = d.get(k)
+        if k == "prompt" and is_item:
+            out["prompt"] = str(v or "").strip()
+            continue
+        if v is None or v == []:
+            continue
+        if v == "":
+            if is_item and k == "upscale" and has_default_upscale:
+                out[k] = ""
+            continue
+        if k == "seed" and v == -1 and not (is_item and has_default_seed):
+            continue
+        if k == "face_fix" and not is_item and v is True:
+            continue
+        if k == "reference_strength" and not has_ref:
+            continue
+        out[k] = v
+    if is_item and "prompt" not in out:
+        out["prompt"] = str(d.get("prompt") or "").strip()
+    return out
+
+
+def serialize_batch(batch: dict, filename: str = "batch.json") -> str:
+    """Format a batch dict as pretty JSON or one-prompt-per-line .txt."""
+    batch = batch if isinstance(batch, dict) else {}
+    raw_defaults = batch.get("defaults") if isinstance(batch.get("defaults"), dict) else {}
+    raw_items = batch.get("items") if isinstance(batch.get("items"), list) else []
+    defaults = _clean_dict(raw_defaults, DEFAULT_KEYS_ORDER, is_item=False)
+    has_seed = defaults.get("seed") not in (None, -1)
+    has_up = bool(defaults.get("upscale"))
+    items = [_clean_dict(it, ITEM_KEYS_ORDER, is_item=True, has_default_seed=has_seed, has_default_upscale=has_up)
+             for it in raw_items if isinstance(it, dict)]
+    if filename.lower().endswith(".txt"):
+        lines = [re.sub(r"\s+", " ", it.get("prompt", "")).strip() for it in items]
+        return "\n".join(l for l in lines if l) + "\n"
+    return json.dumps({"defaults": defaults, "items": items}, indent=2, ensure_ascii=False) + "\n"
+

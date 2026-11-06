@@ -14,6 +14,7 @@ from studio.engine import GenRequest, GpuBusyError, ModelLoadError
 from studio.naming import FORMATS, day_folder, output_stem, save_image, slugify, unique_path
 from studio.recipe import Recipe, read_recipe, write_recipe
 from studio.upscale import check_target, suffix
+from studio.video import VideoRequest, save_video
 
 UPSCALER_NAME = "realesrgan-x4plus"
 STEP_KINDS = {"step", "upscale_step", "train_step"}
@@ -55,6 +56,9 @@ class JobQueue:
 
     def submit_train(self, subject_id: str) -> str:
         return self._submit("train", [subject_id], None)
+
+    def submit_video(self, req: VideoRequest, subject: str) -> str:
+        return self._submit("vid", [req], subject)
 
     def cancel(self) -> None:
         with self._cv:
@@ -119,7 +123,7 @@ class JobQueue:
                 if self._stop:
                     return
                 job_id, kind, items, extra = self._jobs.popleft()
-                total = len(items) if kind in ("up", "train", "fix") else sum(i.count * (2 if i.upscale else 1) for i in items)
+                total = len(items) if kind in ("up", "train", "fix", "vid") else sum(i.count * (2 if i.upscale else 1) for i in items)
                 self._state.update(running=True, current=job_id, done=0, total=total, kind=kind,
                                    label=self._label(kind, items, extra), started=time.time())
             log.info("job %s start: kind=%s label=%r items=%d total=%d extra=%r", job_id, kind, self._state["label"],
@@ -132,6 +136,8 @@ class JobQueue:
                     self._run_train(job_id, items[0])
                 elif kind == "fix":
                     self._run_fix(job_id, Path(items[0]), *extra)
+                elif kind == "vid":
+                    self._run_video(job_id, items[0], extra)
                 else:
                     self._run(job_id, items, extra)
             except Exception as e:      # never let one job end the worker: later jobs would queue forever
@@ -236,7 +242,58 @@ class JobQueue:
                 return f"Fixing a spot as {self.subjects.get(extra[2]).name}"
             except Exception:
                 return "Fixing a spot"
+        if kind == "vid":
+            return "Generating video"
         return f"Batch: {extra}" if extra else "Generating"
+
+    def _run_video(self, job_id, req: VideoRequest, subject: str):
+        try:
+            entry = self.registry.get(req.model_id)
+        except KeyError:
+            with self._cv:
+                self._emit("model_failed", job=job_id, index=1, model=req.model_id,
+                           error=f"model {req.model_id!r} is no longer installed")
+                self._emit("done", job=job_id)
+            return
+        with self._cv:
+            self._emit("model_loading", job=job_id, model=req.model_id)
+        seed = req.seed if req.seed is not None else secrets.randbelow(2**32)
+        vreq = VideoRequest(req.model_id, req.prompt, req.negative, req.width, req.height, req.frames, req.fps,
+                            req.steps, req.guidance, seed, req.image)
+        log.info("job %s video: model=%s %dx%d frames=%d fps=%d steps=%d guidance=%s seed=%d image=%s prompt=%r",
+                 job_id, req.model_id, req.width, req.height, req.frames, req.fps, req.steps, req.guidance, seed,
+                 req.image, req.prompt)
+
+        def on_step(i, n):
+            self._emit_step(job_id, 1, i, n)
+
+        try:
+            frames = self.engine.generate_video(vreq, on_step, self._cancel)
+            if frames:
+                now = self.clock()
+                folder = day_folder(Path(self.settings.output_root), now)
+                path = unique_path(folder, output_stem(subject, now), ".mp4")
+                save_video(frames, path, vreq.fps)
+                extra = {"media": "video", "frames": len(frames), "fps": vreq.fps}
+                if vreq.image:
+                    extra["source_image"] = Path(vreq.image).name
+                write_recipe(path, Recipe(prompt=vreq.prompt, negative=vreq.negative, model_id=entry.id,
+                                          model_name=entry.name, license=entry.license, seed=seed, steps=vreq.steps,
+                                          guidance=vreq.guidance, width=vreq.width, height=vreq.height,
+                                          subject=subject, app_version=VERSION,
+                                          created=now.isoformat(timespec="seconds"), extra=extra))
+                with self._cv:
+                    self._state["done"] = 1
+                    self._emit("video", job=job_id, index=1, path=str(path), seed=seed)
+        except (ModelLoadError, GpuBusyError) as e:
+            with self._cv:
+                self._emit("model_failed", job=job_id, index=1, model=req.model_id, error=str(e))
+        except Exception as e:
+            log.exception("job %s video failed", job_id)
+            with self._cv:
+                self._emit("item_failed", job=job_id, index=1, error=str(e))
+        with self._cv:
+            self._emit("cancelled" if self._cancel.is_set() else "done", job=job_id)
 
     def _run_upscale(self, job_id, paths, choice):
         for p in paths:

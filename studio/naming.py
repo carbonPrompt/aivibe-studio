@@ -35,13 +35,14 @@ def output_stem(subject: str, when: datetime, index: int | None = None, scale: s
 # What a picture can be saved as (Settings > Output): name -> (extension, PIL format)
 FORMATS = {"png": (".png", "PNG"), "jpg": (".jpg", "JPEG"), "webp": (".webp", "WEBP")}
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp")      # what the gallery shows and opens
+MEDIA_EXT = (*IMAGE_EXT, ".mp4")
 
 
 def unique_path(folder: Path, stem: str, ext: str = ".png") -> Path:
     """The first free name: stem, then stem_<SS> (seconds now), then stem_<SS>_<k>. Checks the recipe and the
-    other image types too: x.png and x.jpg would share the recipe x.json."""
+    other image/video types too: x.png and x.jpg would share the recipe x.json."""
     def free(s):
-        return not any((folder / (s + e)).exists() for e in (*IMAGE_EXT, ".json"))
+        return not any((folder / (s + e)).exists() for e in (*MEDIA_EXT, ".json"))
     if free(stem):
         return folder / (stem + ext)
     alt = f"{stem}_{datetime.now():%S}"

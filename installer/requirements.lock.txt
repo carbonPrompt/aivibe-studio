@@ -48,3 +48,4 @@ einops==0.8.2
 peft==0.21.2
 bitsandbytes==0.50.2
 opencv-python-headless==4.14.0.94
+imageio-ffmpeg==0.6.0

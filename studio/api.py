@@ -18,14 +18,16 @@ from PIL import Image
 
 from studio import VERSION
 from studio import assistant, diag, hardware, update
-from studio.batch import DEFAULT_LIKENESS, BatchError, parse_batch, safe_reference
+from studio.batch import DEFAULT_LIKENESS, BatchError, load_raw_batch, parse_batch, safe_reference, serialize_batch
 from studio.hfget import FetchError, download_patterns  # noqa: F401 (download_patterns re-exported)
 from studio.engine import GenRequest, LIKENESS_FAMILIES, MAX_SUBJECTS
-from studio.naming import IMAGE_EXT, slugify, subject_from_prompt
+from studio.naming import IMAGE_EXT, MEDIA_EXT, slugify, subject_from_prompt
 from studio.recipe import read_recipe
 from studio.settings import save_settings
 from studio.providers import PROVIDERS, ProviderError
 from studio.upscale import parse_choice
+from studio.video import (VIDEO_EXT, VIDEO_FAMILIES, VIDEO_I2V_FAMILIES, VIDEO_T2V_FAMILIES, VideoRequest,
+                          snap_video_params, video_first_frame)
 
 log = logging.getLogger("studio.api")
 
@@ -151,6 +153,8 @@ class Api:
         out = []
         for m in self._registry.all():
             out.append({"id": m.id, "name": m.name, "family": m.family, "license": m.license,
+                        "kind": "video" if m.family in VIDEO_FAMILIES else "image",
+                        "i2v": m.family in VIDEO_I2V_FAMILIES, "t2v": m.family in VIDEO_T2V_FAMILIES,
                         "description": m.description, "defaults": m.defaults, "size_gb": m.size_gb,
                         "downloaded": self._registry.is_downloaded(m.id), "user": m.user,
                         "guide": f"https://huggingface.co/{m.source['hf']}" if "hf" in m.source else None,
@@ -389,6 +393,50 @@ class Api:
                          bool(p.get("face_fix", True)))
         return {"job": self._queue.submit_single(req, subject)}
 
+    def generate_video(self, p: dict) -> dict:
+        try:
+            model_id = p["model"]
+            m = self._registry.get(model_id)
+            if m.family not in VIDEO_FAMILIES:
+                return {"error": f"{m.name} is an image model; pick a video model"}
+            prompt = str(p.get("prompt") or "").strip()
+            img_path = str(p.get("image") or "").strip() or None
+            w = int(p.get("width", m.defaults.get("width", 704)))
+            h = int(p.get("height", m.defaults.get("height", 480)))
+            frames = int(p.get("frames", m.defaults.get("frames", 49)))
+            fps = int(p.get("fps", m.defaults.get("fps", 24)))
+            steps = int(p.get("steps", m.defaults.get("steps", 30)))
+            guidance = float(p.get("guidance", m.defaults.get("guidance", 3.0)))
+            seed = int(p.get("seed", -1))
+        except KeyError as e:
+            return {"error": f"unknown model or missing setting: {e}"}
+        except (TypeError, ValueError) as e:
+            return {"error": f"bad number: {e}"}
+        if img_path:
+            problem = safe_reference(img_path)
+            if problem:
+                return {"error": problem.replace("reference", "starting")}
+            if m.family not in VIDEO_I2V_FAMILIES:
+                return {"error": f"{m.name} does not support starting images (use LTX-Video or SVD-XT)"}
+        elif m.family not in VIDEO_T2V_FAMILIES:
+            return {"error": f"{m.name} requires a starting image"}
+        if m.family in VIDEO_T2V_FAMILIES and not prompt:
+            return {"error": "write a prompt first"}
+        if not 256 <= w <= 1280 or not 256 <= h <= 1280:
+            return {"error": "video width and height must be between 256 and 1280"}
+        if not 1 <= steps <= 150:
+            return {"error": "steps must be 1 to 150"}
+        w, h, frames, fps = snap_video_params(m.family, w, h, frames, fps)
+        need = self._needs_download(model_id)
+        if need:
+            return {"needs_download": need}
+        name = str(p.get("name") or "").strip()
+        subject = (slugify(name) if name else subject_from_prompt(prompt) if prompt
+                   else slugify(Path(img_path).stem) if img_path else "video")
+        req = VideoRequest(model_id, prompt, str(p.get("negative") or ""), w, h, frames, fps, steps, guidance,
+                           None if seed < 0 else seed, img_path)
+        return {"job": self._queue.submit_video(req, subject), "width": w, "height": h, "frames": frames, "fps": fps}
+
     def _check_subjects(self, picks, model_id):
         """[(id, weight)] from [{id, weight}], or an error message."""
         if not picks:
@@ -540,6 +588,98 @@ class Api:
             return {"needs_download": [self._needs_download(m) for m in sorted(need)]}
         return {"job": self._queue.submit_batch(items, Path(path).name), "count": len(items)}
 
+    def _validate_batch_text(self, text: str, filename: str) -> tuple[list, list[str]]:
+        fallback = self._settings.last.get("model", "realvis-v5")
+        try:
+            items = parse_batch(text, filename, self._registry, fallback, subjects=self._subjects)
+        except BatchError as e:
+            return [], list(e.problems)
+        except (TypeError, ValueError, OverflowError) as e:
+            return [], [f"the batch has a value the app cannot read ({e})"]
+        problems = []
+        for it in items:
+            fam = self._registry.get(it.model_id).family
+            if it.subjects and fam not in LIKENESS_FAMILIES:
+                problems.append(f"item {it.index}: subjects work with SDXL models only (RealVisXL, Juggernaut)")
+            if it.reference and fam not in LIKENESS_FAMILIES:
+                problems.append(f"item {it.index}: reference images work with SDXL models only (RealVisXL, Juggernaut)")
+        return items, problems
+
+    def open_batch_file(self, path: str | None = None) -> dict:
+        """Load a .json or .txt batch file into the Batch Maker UI for viewing and editing."""
+        if path is None:
+            if self._window is None:
+                return {"error": "no window"}
+            import webview
+            picked = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=False,
+                                                     file_types=("Batch files (*.json;*.txt)", "All files (*.*)"))
+            if not picked:
+                return {"cancelled": True}
+            path = picked[0] if isinstance(picked, (list, tuple)) else picked
+        p = Path(path)
+        try:
+            text = p.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError) as e:
+            return {"error": f"could not read the file: {e}"}
+        try:
+            batch = load_raw_batch(text, p.name)
+        except BatchError as e:
+            return {"error": "; ".join(e.problems), "problems": e.problems}
+        _, problems = self._validate_batch_text(text, p.name)
+        return {"path": str(p), "name": p.stem, "filename": p.name, "batch": batch, "problems": problems}
+
+    def save_batch_file(self, batch: dict, path: str | None = None, suggested_name: str = "batch.json") -> dict:
+        """Save a batch from the Batch Maker UI to a .json or .txt file on disk."""
+        if path is None:
+            if self._window is None:
+                return {"error": "no window"}
+            import webview
+            sname = str(suggested_name or "batch.json").strip() or "batch.json"
+            if not sname.lower().endswith((".json", ".txt")):
+                sname += ".json"
+            picked = self._window.create_file_dialog(
+                webview.FileDialog.SAVE, directory=str(self._root()), save_filename=sname,
+                file_types=("Batch JSON (*.json)", "Prompt list (*.txt)", "All files (*.*)"))
+            if not picked:
+                return {"cancelled": True}
+            path = picked[0] if isinstance(picked, (list, tuple)) else picked
+        p = Path(str(path).strip())
+        if p.suffix.lower() not in (".json", ".txt"):
+            p = p.with_suffix(".json")
+        text = serialize_batch(batch, p.name)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        except OSError as e:
+            return {"error": f"could not save the file: {e}"}
+        _, problems = self._validate_batch_text(text, p.name)
+        return {"ok": True, "path": str(p), "name": p.stem, "filename": p.name, "problems": problems}
+
+    def check_batch(self, batch: dict) -> dict:
+        """Validate an in-memory batch from the Batch Maker UI without running it."""
+        text = serialize_batch(batch, "batch.json")
+        items, problems = self._validate_batch_text(text, "batch.json")
+        if problems:
+            return {"ok": False, "problems": problems}
+        return {"ok": True, "problems": [], "count": len(items), "pictures": sum(i.count for i in items)}
+
+    def run_batch(self, batch: dict, name: str = "batch") -> dict:
+        """Validate and run an in-memory batch from the Batch Maker UI."""
+        raw_name = str(name or "").strip()
+        if raw_name.lower().endswith((".json", ".txt")):
+            fname = Path(raw_name).name
+        else:
+            fname = f"{slugify(raw_name or 'batch', max_words=6) or 'batch'}.json"
+        text = serialize_batch(batch, "batch.json")
+        items, problems = self._validate_batch_text(text, fname)
+        if problems:
+            return {"problems": problems}
+        need = [n for n in {self._needs_download(i.model_id) and i.model_id for i in items} if n]
+        if need:
+            return {"needs_download": [self._needs_download(m) for m in sorted(need)]}
+        return {"job": self._queue.submit_batch(items, fname), "count": len(items),
+                "pictures": sum(i.count for i in items), "name": fname}
+
     def cancel(self) -> None:
         self._queue.cancel()
 
@@ -562,13 +702,13 @@ class Api:
         limit = int(limit or self._settings.last.get("recent_limit") or 60)
         chosen = None if day else self._recent_folder()
         if chosen:      # that folder only, not its subfolders
-            pngs = [p for p in chosen.iterdir() if p.suffix.lower() in IMAGE_EXT] if chosen.is_dir() else []
+            pngs = [p for p in chosen.iterdir() if p.suffix.lower() in MEDIA_EXT] if chosen.is_dir() else []
         else:
             root = self._root()
             if not root.exists():
                 return []
             folders = [root / day] if day else sorted((d for d in root.iterdir() if d.is_dir()), reverse=True)[:7]
-            pngs = [p for d in folders if d.is_dir() for p in d.rglob("*") if p.suffix.lower() in IMAGE_EXT]
+            pngs = [p for d in folders if d.is_dir() for p in d.rglob("*") if p.suffix.lower() in MEDIA_EXT]
         pngs = sorted(pngs, key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
         out = []
         for p in pngs:
@@ -576,11 +716,14 @@ class Api:
                 thumb = self._thumb(p)
             except Exception:       # one unreadable or oversized file must not take the whole gallery down
                 continue
-            item = {"path": str(p), "name": p.name, "thumb": thumb, "upscaled": None, "source": None}
+            is_vid = p.suffix.lower() in VIDEO_EXT
+            item = {"path": str(p), "name": p.name, "thumb": thumb, "upscaled": None, "source": None,
+                    "media": "video" if is_vid else "image"}
             try:
                 r = read_recipe(p)
                 item.update(seed=r.seed, model=r.model_name, prompt=r.prompt, width=r.width, height=r.height,
-                            upscaled=r.extra.get("upscale"), source=r.extra.get("upscaled_from"))
+                            upscaled=r.extra.get("upscale"), source=r.extra.get("upscaled_from"),
+                            frames=r.extra.get("frames"), fps=r.extra.get("fps"))
             except (OSError, ValueError, TypeError):
                 pass
             out.append(item)
@@ -589,35 +732,46 @@ class Api:
     def _thumb(self, p: Path) -> str:
         key = (str(p), p.stat().st_mtime)
         if key not in self._thumbs:
-            with Image.open(p) as im:
-                im = im.convert("RGB")
+            if p.suffix.lower() in VIDEO_EXT:
+                im = video_first_frame(p)
                 im.thumbnail((256, 256))
                 buf = io.BytesIO()
                 im.save(buf, "JPEG", quality=82)
+            else:
+                with Image.open(p) as im:
+                    im = im.convert("RGB")
+                    im.thumbnail((256, 256))
+                    buf = io.BytesIO()
+                    im.save(buf, "JPEG", quality=82)
             self._thumbs[key] = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
         return self._thumbs[key]
 
-    def _checked(self, path: str) -> Path | None:
+    def _checked(self, path: str, allow_video: bool = False) -> Path | None:
         p = Path(path)
-        if p.suffix.lower() not in IMAGE_EXT or not p.is_file():
+        allowed = MEDIA_EXT if allow_video else IMAGE_EXT
+        if p.suffix.lower() not in allowed or not p.is_file():
             return None
         chosen = self._recent_folder()
         return p if _under(p, self._root()) or (chosen and p.parent.resolve() == chosen.resolve()) else None
 
     def image(self, path: str) -> dict:
-        p = self._checked(path)
+        p = self._checked(path, allow_video=True)
         if p is None:
             return {"error": "not an image in the output folder"}
-        mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".webp": "webp"}.get(p.suffix.lower(), "png")
-        data = f"data:image/{mime};base64," + base64.b64encode(p.read_bytes()).decode()
+        is_vid = p.suffix.lower() in VIDEO_EXT
+        if is_vid:
+            data = "data:video/mp4;base64," + base64.b64encode(p.read_bytes()).decode()
+        else:
+            mime = {".jpg": "jpeg", ".jpeg": "jpeg", ".webp": "webp"}.get(p.suffix.lower(), "png")
+            data = f"data:image/{mime};base64," + base64.b64encode(p.read_bytes()).decode()
         try:
             recipe = asdict(read_recipe(p))
         except (OSError, ValueError, TypeError):
             recipe = None
-        return {"data": data, "recipe": recipe, "name": p.name}
+        return {"data": data, "recipe": recipe, "name": p.name, "media": "video" if is_vid else "image"}
 
     def remake(self, path: str, new_seed: bool) -> dict:
-        p = self._checked(path)
+        p = self._checked(path, allow_video=True)
         if p is None:
             return {"error": "not an image in the output folder"}
         try:
@@ -629,6 +783,13 @@ class Api:
         need = self._needs_download(r.model_id) if r.model_id in {m.id for m in self._registry.all()} else None
         if need:
             return {"needs_download": need}
+        if r.extra.get("media") == "video" or (r.model_id in {m.id for m in self._registry.all()}
+                                               and self._registry.get(r.model_id).family in VIDEO_FAMILIES):
+            frames = int(r.extra.get("frames") or 49)
+            fps = int(r.extra.get("fps") or 24)
+            vreq = VideoRequest(r.model_id, r.prompt, r.negative, r.width, r.height, frames, fps, r.steps, r.guidance,
+                                None if new_seed else r.seed, None)
+            return {"job": self._queue.submit_video(vreq, r.subject)}
         subs = []
         for x in r.extra.get("subjects") or []:
             if self._subjects is None:
@@ -699,14 +860,14 @@ class Api:
         return {"job": self._queue.submit_upscale([str(dest)], c), "count": 1, "imported": str(dest)}
 
     def copy_prompt(self, path: str) -> str:
-        p = self._checked(path)
+        p = self._checked(path, allow_video=True)
         try:
             return read_recipe(p).prompt if p else ""
         except (OSError, ValueError, TypeError):
             return ""
 
     def open_output(self, path: str | None = None) -> None:
-        target = Path(path).parent if path and self._checked(path) else self._root() / f"{datetime.now():%Y-%m-%d}"
+        target = Path(path).parent if path and self._checked(path, allow_video=True) else self._root() / f"{datetime.now():%Y-%m-%d}"
         if not target.exists():
             target = self._root()
         target.mkdir(parents=True, exist_ok=True)

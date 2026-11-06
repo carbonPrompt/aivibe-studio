@@ -75,7 +75,9 @@ function remember() {
       steps: c.steps, guidance: c.guidance, count: c.count, random_seed: $("randomSeed").checked, seed: +$("seed").value});
   }, 600);
 }
-function setSlider(id, v) { $(id).value = v; $(id + "Out").textContent = id === "guidance" ? (+v).toFixed(1) : v; }
+function setSlider(id, v) { $(id).value = v; $(id + "Out").textContent = (id === "guidance" || id === "vidGuidance") ? (+v).toFixed(1) : v; }
+const imageModels = () => models.filter(m => m.kind !== "video");
+const videoModels = () => models.filter(m => m.kind === "video");
 function summary() {
   const m = modelById[$("model").value];
   const n = +$("count").value;
@@ -110,16 +112,26 @@ function recommended() {
   document.querySelectorAll("#aspect button").forEach(b => b.classList.toggle("on", b.dataset.a === "1:1"));
   summary(); remember();
 }
-function fillModels(keep) {
-  $("model").replaceChildren(...models.map(m => el("option", {value: m.id}, m.name + (m.downloaded ? "" : "  (download)")
+function fillModels(keep, keepVid) {
+  const imgs = imageModels();
+  $("model").replaceChildren(...imgs.map(m => el("option", {value: m.id}, m.name + (m.downloaded ? "" : "  (download)")
     + (m.fit === "too_big" ? "  (too big for this card)" : m.fit === "tight" ? "  (may be slow)" : ""))));
-  if (keep && modelById[keep]) $("model").value = keep;
+  if (keep && modelById[keep] && modelById[keep].kind !== "video") $("model").value = keep;
   showModel();
+  const vids = videoModels();
+  if ($("vidModel")) {
+    const prevVid = keepVid || $("vidModel").value || (settings && settings.last.vid_model) || "ltx-video";
+    $("vidModel").replaceChildren(...vids.map(m => el("option", {value: m.id}, m.name + (m.downloaded ? "" : "  (download)")
+      + (m.fit === "too_big" ? "  (too big for this card)" : m.fit === "tight" ? "  (may be slow)" : ""))));
+    if (prevVid && modelById[prevVid] && modelById[prevVid].kind === "video") $("vidModel").value = prevVid;
+    showVidModel();
+  }
 }
 async function loadModels(keep) {
   models = await api.models();
   modelById = Object.fromEntries(models.map(m => [m.id, m]));
-  fillModels(keep || $("model").value);
+  fillModels(keep || $("model").value, $("vidModel") && $("vidModel").value);
+  if (!$("batchMaker").hidden) bmRender();
 }
 function fillChips() {
   const chips = $("chips"); chips.replaceChildren();
@@ -148,6 +160,8 @@ function fillNegatives() {
     } else if (sel.value !== "") { $("negative").value = settings.last.negatives[+sel.value].text; remember(); }
     sel.value = "";
   };
+  bmFillNegPresets();
+  vidFillNegPresets();
 }
 const PANELS = {model: "Model", subjects: "Subjects", reference: "Reference image", canvas: "Canvas", quality: "Quality",
   variations: "Variations", device: "Processing device", upscale: "Upscale", assistant: "Assistant", log: "Log"};
@@ -379,6 +393,7 @@ async function loadSubjects() {
   subjects = await api.subjects();
   subjectPicks = subjectPicks.filter(p => subjects.some(s => s.id === p.id && s.trained));
   drawSubjects();
+  if (!$("batchMaker").hidden) bmRender();
 }
 function drawSubjects() {
   $("subjectChips").replaceChildren(...subjects.map(s => {
@@ -575,6 +590,1012 @@ async function loadBatch() {
   log(`Batch started: ${r.count} prompts`, "b");
 }
 
+// ---------- batch maker UI: build, open, modify, save and run batches ----------
+const BM_STORAGE_KEY = "aivibe_bm_draft_v1";
+const STD_UPSCALES = new Set(["", "2x", "4x", "1080p", "4k"]);
+let bm = {
+  path: null,
+  filename: null,
+  name: "my-batch",
+  dirty: false,
+  jsonMode: false,
+  expandAll: false,
+  openOpts: new Set(),
+  problems: [],
+  defRefThumb: null,
+  batch: {defaults: {}, items: [{prompt: ""}]},
+};
+
+function bmLoadDraft() {
+  try {
+    const raw = localStorage.getItem(BM_STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    if (saved && isObj(saved.batch)) {
+      bm.batch = tidyBatch(saved.batch);
+      if (!bm.batch.items.length) bm.batch.items = [{prompt: ""}];
+      bm.name = saved.name || "my-batch";
+      bm.path = saved.path || null;
+      bm.filename = saved.filename || null;
+      bm.dirty = !!saved.dirty;
+    }
+  } catch (e) { /* ignore corrupt draft */ }
+}
+
+function bmSaveDraft() {
+  try {
+    localStorage.setItem(BM_STORAGE_KEY, JSON.stringify({
+      name: bm.name, path: bm.path, filename: bm.filename, dirty: bm.dirty, batch: bm.batch,
+    }));
+  } catch (e) { /* ignore quota errors */ }
+}
+
+function bmNonEmptyCount() {
+  return (bm.batch.items || []).filter(it => isObj(it) && String(it.prompt || "").trim()).length;
+}
+
+function bmTotalPictures() {
+  const d = bm.batch.defaults || {};
+  return (bm.batch.items || []).reduce((sum, it) => {
+    const c = +((it && it.count) ?? d.count ?? 1) || 1;
+    return sum + Math.max(1, c);
+  }, 0);
+}
+
+function bmUpdateHeader() {
+  const n = (bm.batch.items || []).length;
+  const active = bmNonEmptyCount();
+  const pics = bmTotalPictures();
+  $("navBatchLabel").textContent = active > 0 ? `Batch (${active})` : "Batch";
+  $("bmSummary").textContent = `${n} item${n === 1 ? "" : "s"} · ${pics} picture${pics === 1 ? "" : "s"}`;
+  const info = $("bmFileInfo");
+  if (bm.path) {
+    info.textContent = `File: ${bm.filename || bm.path.split(/[\\/]/).pop()}${bm.dirty ? " (modified)" : " (saved)"}`;
+    info.title = bm.path;
+  } else {
+    info.textContent = bm.dirty ? "Unsaved batch (modified)" : "New unsaved batch";
+    info.title = "";
+  }
+  const canRun = active > 0 && bm.batch.items.every(it => String(it.prompt || "").trim());
+  $("bmRun").disabled = $("bmSaveRun").disabled = !canRun && !bm.jsonMode;
+}
+
+function bmTouch(clearProblems = true) {
+  bm.dirty = true;
+  if (clearProblems && bm.problems.length) {
+    bm.problems = [];
+    $("bmProblems").replaceChildren();
+    $("bmStatus").textContent = "Modified. Click Check batch or Run batch to validate.";
+  }
+  bmSaveDraft();
+  bmUpdateHeader();
+}
+
+function showView(mode) {
+  $("modal").hidden = true;
+  $("work").hidden = mode !== "create";
+  $("videoMaker").hidden = mode !== "video";
+  $("batchMaker").hidden = mode !== "batch";
+  $("navCreate").classList.toggle("on", mode === "create");
+  $("navVideo").classList.toggle("on", mode === "video");
+  $("navBatch").classList.toggle("on", mode === "batch");
+  if (mode === "batch") bmRender();
+  if (mode === "video") vidRender();
+}
+
+function bmFillNegPresets() {
+  const sel = $("bmDefNegPreset");
+  if (!sel || !settings) return;
+  sel.replaceChildren(el("option", {value: ""}, "Presets…"),
+    ...(settings.last.negatives || []).map((n, i) => el("option", {value: String(i)}, n.name)));
+  sel.onchange = () => {
+    if (sel.value !== "") {
+      const txt = settings.last.negatives[+sel.value].text;
+      $("bmDefNegative").value = txt;
+      if (txt.trim()) bm.batch.defaults.negative = txt; else delete bm.batch.defaults.negative;
+      bmTouch();
+    }
+    sel.value = "";
+  };
+}
+
+function bmFindSubject(nameOrId) {
+  const q = String(nameOrId || "").trim().toLowerCase();
+  return subjects.find(s => s.id.toLowerCase() === q || s.name.toLowerCase() === q) || null;
+}
+
+function bmNormalizeSubList(raw) {
+  return asList(raw).map(r => {
+    const rawName = isObj(r) ? (r.name || r.id || "") : String(r || "");
+    const s = bmFindSubject(rawName);
+    const hasW = isObj(r) && r.weight != null && r.weight !== "";
+    const w = hasW ? +r.weight : (s ? (s.default_weight ?? 1.0) : 1.0);
+    return {name: s ? s.name : String(rawName).trim(), weight: isFinite(w) ? w : 1.0, explicit: hasW};
+  }).filter(x => x.name);
+}
+
+function bmSerializeSubList(entries) {
+  return entries.map(e => e.explicit ? {name: e.name, weight: +(+e.weight).toFixed(2)} : e.name);
+}
+
+function bmRenderSubjectEditor(chipsBox, picksBox, rawList, onChange) {
+  const entries = bmNormalizeSubList(rawList);
+  const knownNames = new Set(subjects.map(s => s.name.toLowerCase()));
+  const extraEntries = entries.filter(e => !knownNames.has(e.name.toLowerCase()));
+  const allChoices = [
+    ...subjects.map(s => ({name: s.name, trained: s.trained, kind: s.kind, class_word: s.class_word, default_weight: s.default_weight || 1.0})),
+    ...extraEntries.map(e => ({name: e.name, trained: true, kind: "in file", class_word: "subject", default_weight: e.weight || 1.0})),
+  ];
+  chipsBox.replaceChildren(...(allChoices.length ? allChoices.map(s => {
+    const idx = entries.findIndex(e => e.name.toLowerCase() === s.name.toLowerCase());
+    const on = idx >= 0;
+    const chip = el("span", {
+      class: "chip" + (on ? " on" : "") + (s.trained ? "" : " untrained"),
+      title: s.trained ? `${s.name} (${s.class_word})` : `${s.name}: not trained yet`,
+    }, s.name);
+    chip.onclick = () => {
+      if (on) {
+        entries.splice(idx, 1);
+      } else {
+        if (entries.length >= 3) return log("Up to 3 subjects in one picture.", "em");
+        entries.push({name: s.name, weight: s.default_weight || 1.0, explicit: false});
+      }
+      onChange(entries.length ? bmSerializeSubList(entries) : null);
+    };
+    return chip;
+  }) : [el("span", {class: "desc"}, "No trained subjects yet.")]));
+
+  picksBox.replaceChildren(...entries.map((e, idx) => {
+    const num = el("input", {type: "number", min: "0", max: "1.3", step: "0.05", value: (+e.weight).toFixed(2), title: "Likeness weight (0 to 1.3)"});
+    const range = el("input", {type: "range", min: "0", max: "1.3", step: "0.05", value: String(e.weight), title: "Drag to adjust likeness strength"});
+    const updateW = val => {
+      const w = Math.min(1.3, Math.max(0, +val || 0));
+      e.weight = w; e.explicit = true;
+      range.value = String(w); num.value = w.toFixed(2);
+      onChange(bmSerializeSubList(entries));
+    };
+    range.oninput = () => { num.value = (+range.value).toFixed(2); };
+    range.onchange = () => updateW(range.value);
+    num.onchange = () => updateW(num.value);
+    const rm = el("button", {class: "tiny ghost", title: "Remove this subject", onclick: () => {
+      entries.splice(idx, 1);
+      onChange(entries.length ? bmSerializeSubList(entries) : null);
+    }}, "×");
+    return el("div", {class: "bm-sub-row"}, el("span", {}, e.name), range, num, rm);
+  }));
+}
+
+function bmRenderDefaults() {
+  const d = bm.batch.defaults || (bm.batch.defaults = {});
+  const imgs = imageModels();
+  const curModel = modelById[settings.last.model] || imgs[0];
+  const modelSel = $("bmDefModel");
+  modelSel.replaceChildren(
+    el("option", {value: ""}, `(studio model: ${curModel ? curModel.name : "default"})`),
+    ...imgs.map(m => el("option", {value: m.id}, m.name + (m.downloaded ? "" : " (download)"))),
+    ...(d.model && !modelById[d.model] ? [el("option", {value: String(d.model)}, `${d.model} (unknown)`)] : [])
+  );
+  modelSel.value = d.model || "";
+
+  const effModel = modelById[d.model] || curModel;
+  const md = effModel ? effModel.defaults : {width: 1024, height: 1024, steps: 30, guidance: 6.0};
+  $("bmDefWidth").placeholder = String(md.width || 1024);
+  $("bmDefHeight").placeholder = String(md.height || 1024);
+  $("bmDefSteps").placeholder = String(md.steps ?? 30);
+  $("bmDefGuidance").placeholder = String(md.guidance ?? 6.0);
+  $("bmDefWidth").value = d.width ?? "";
+  $("bmDefHeight").value = d.height ?? "";
+  $("bmDefCount").value = d.count ?? "";
+  $("bmDefSteps").value = d.steps ?? "";
+  $("bmDefGuidance").value = d.guidance ?? "";
+  $("bmDefSeed").value = d.seed != null && d.seed !== -1 ? d.seed : "";
+
+  const upVal = d.upscale == null ? "" : String(d.upscale).toLowerCase();
+  if (STD_UPSCALES.has(upVal)) {
+    $("bmDefUpscale").value = upVal;
+    $("bmDefUpPxWrap").hidden = true;
+    $("bmDefUpPx").value = "";
+  } else {
+    $("bmDefUpscale").value = "custom";
+    $("bmDefUpPxWrap").hidden = false;
+    $("bmDefUpPx").value = String(d.upscale).replace(/px$/i, "");
+  }
+
+  $("bmDefNegative").value = d.negative || "";
+  $("bmDefFaceFix").checked = d.face_fix !== false;
+  $("bmDefRefPath").value = d.reference || "";
+  $("bmDefRefStrength").value = d.reference_strength ?? 0.5;
+  const rt = $("bmDefRefThumb");
+  if (d.reference && bm.defRefThumb && bm.defRefThumb.path === d.reference) {
+    rt.style.backgroundImage = `url("${bm.defRefThumb.thumb}")`; rt.textContent = ""; rt.title = d.reference;
+  } else {
+    rt.style.backgroundImage = ""; rt.textContent = d.reference ? "file" : "none"; rt.title = d.reference || "";
+  }
+
+  bmRenderSubjectEditor($("bmDefSubChips"), $("bmDefSubPicks"), d.subjects, next => {
+    if (next && next.length) d.subjects = next; else delete d.subjects;
+    bmTouch(); bmRenderDefaults(); bmRenderItems();
+  });
+}
+
+function bmItemOverrideCount(it) {
+  let n = 0;
+  for (const k of ["negative", "subjects", "steps", "guidance", "face_fix", "reference"]) {
+    if (it[k] !== undefined && it[k] !== null && it[k] !== "" && !(Array.isArray(it[k]) && !it[k].length)) n++;
+  }
+  return n;
+}
+
+function bmRenderItems() {
+  const d = bm.batch.defaults || {};
+  const items = bm.batch.items || (bm.batch.items = []);
+  const box = $("bmItems");
+  if (!items.length) {
+    box.replaceChildren(el("div", {class: "bm-empty"}, "No items in this batch yet. Click + Add item or + Paste lines above."));
+    return;
+  }
+  const imgs = imageModels();
+  const defModel = modelById[d.model] || modelById[settings.last.model] || imgs[0];
+  const defModelLabel = defModel ? defModel.name : "default";
+  const defW = d.width || (defModel && defModel.defaults.width) || 1024;
+  const defH = d.height || (defModel && defModel.defaults.height) || 1024;
+
+  box.replaceChildren(...items.map((it, i) => {
+    const ovrCount = bmItemOverrideCount(it);
+    const isOpen = bm.expandAll || bm.openOpts.has(i) || ovrCount > 0;
+
+    // Prompt textarea
+    const promptIn = el("textarea", {class: "bitem-prompt", rows: "2", placeholder: "Describe this image…"}, it.prompt || "");
+    promptIn.oninput = () => { it.prompt = promptIn.value; bmTouch(); };
+
+    // Name input
+    const nameIn = el("input", {class: "bitem-name", placeholder: "name (optional)", value: it.name || "", title: "Short label used in the saved file name"});
+    nameIn.onchange = () => { const v = nameIn.value.trim(); if (v) it.name = v; else delete it.name; bmTouch(); };
+
+    // Model select
+    const modelSel = el("select", {class: "bitem-model", title: "Model for this item (or use shared default)"},
+      el("option", {value: ""}, `(default: ${defModelLabel})`),
+      ...imgs.map(m => el("option", {value: m.id, selected: it.model === m.id ? "selected" : null}, m.name + (m.downloaded ? "" : " (dl)"))),
+      ...(it.model && !modelById[it.model] ? [el("option", {value: String(it.model), selected: "selected"}, `${it.model} (unknown)`)] : [])
+    );
+    modelSel.onchange = () => {
+      if (modelSel.value) it.model = modelSel.value; else delete it.model;
+      bmTouch(); bmRenderItems();
+    };
+
+    // Size input (WxH)
+    const sizeVal = it.width && it.height ? `${it.width}x${it.height}` : "";
+    const sizeIn = el("input", {class: "bitem-size", list: "bmSizePresets", value: sizeVal, placeholder: `${defW}x${defH}`, title: "Size as WidthxHeight (e.g. 1344x768), or blank for default"});
+    sizeIn.onchange = () => {
+      const m = sizeIn.value.trim().match(/^(\d+)\s*[x×,]\s*(\d+)$/i);
+      if (m) { it.width = +m[1]; it.height = +m[2]; sizeIn.value = `${it.width}x${it.height}`; }
+      else { delete it.width; delete it.height; sizeIn.value = ""; }
+      bmTouch();
+    };
+
+    // Count input
+    const countIn = el("input", {class: "bitem-count", type: "number", min: "1", max: "8", value: it.count ?? "", placeholder: `×${d.count || 1}`, title: "Images for this item (1 to 8)"});
+    countIn.onchange = () => {
+      if (countIn.value !== "") it.count = +countIn.value; else delete it.count;
+      bmTouch();
+    };
+
+    // Upscale select
+    const rawUp = it.upscale === undefined ? "__def__" : String(it.upscale).toLowerCase();
+    const isCustomUp = rawUp !== "__def__" && !STD_UPSCALES.has(rawUp);
+    const upSel = el("select", {class: "bitem-up", title: "Upscale for this item"},
+      el("option", {value: "__def__"}, `(default${d.upscale ? `: ${d.upscale}` : ": off"})`),
+      ...(d.upscale ? [el("option", {value: ""}, "Off (no upscale)")] : []),
+      el("option", {value: "2x"}, "Upscale 2x"),
+      el("option", {value: "4x"}, "Upscale 4x"),
+      el("option", {value: "1080p"}, "Upscale 1080p"),
+      el("option", {value: "4k"}, "Upscale 4K"),
+      ...(isCustomUp ? [el("option", {value: String(it.upscale)}, `Upscale ${it.upscale}`)] : []),
+      el("option", {value: "__custom__"}, "Custom px…")
+    );
+    upSel.value = isCustomUp ? String(it.upscale) : rawUp;
+    upSel.onchange = () => {
+      if (upSel.value === "__def__") {
+        delete it.upscale;
+      } else if (upSel.value === "__custom__") {
+        const px = prompt("Target long edge in pixels (512 to 8192):", isCustomUp ? String(it.upscale).replace(/px$/i, "") : "2400");
+        if (px && /^\d+/.test(px.trim())) it.upscale = `${parseInt(px.trim(), 10)}px`;
+      } else {
+        it.upscale = upSel.value;
+      }
+      bmTouch(); bmRenderItems();
+    };
+
+    // Seed input
+    const seedIn = el("input", {class: "bitem-seed", type: "number", value: it.seed ?? "", placeholder: d.seed != null && d.seed !== -1 ? `seed ${d.seed}` : "random seed", title: "Seed for this item (-1 for random, or blank for default)"});
+    seedIn.onchange = () => {
+      if (seedIn.value.trim() !== "") it.seed = +seedIn.value; else delete it.seed;
+      bmTouch();
+    };
+
+    // Options drawer toggle
+    const moreBox = el("div", {class: "bitem-more", hidden: !isOpen});
+    const optBtn = el("button", {
+      class: "ghost bitem-opt-btn" + (ovrCount > 0 ? " has-ovr" : ""),
+      title: "Show or hide per-item overrides (Negative prompt, Subjects, Steps, Guidance, Face fix, Reference)",
+      onclick: () => {
+        if (!moreBox.hidden) { moreBox.hidden = true; bm.openOpts.delete(i); }
+        else { moreBox.hidden = false; bm.openOpts.add(i); }
+        optBtn.textContent = `${ovrCount ? `Options (${ovrCount})` : "Options"} ${moreBox.hidden ? "▾" : "▴"}`;
+      },
+    }, `${ovrCount ? `Options (${ovrCount})` : "Options"} ${isOpen ? "▴" : "▾"}`);
+
+    // ---- Advanced Overrides Drawer Content ----
+    const effItemModel = modelById[it.model || d.model] || defModel;
+    const imd = effItemModel ? effItemModel.defaults : {steps: 30, guidance: 6.0};
+    const stepsIn = el("input", {type: "number", min: "1", max: "150", value: it.steps ?? "", placeholder: String(d.steps ?? imd.steps ?? 30)});
+    stepsIn.onchange = () => { if (stepsIn.value !== "") it.steps = +stepsIn.value; else delete it.steps; bmTouch(); bmRenderItems(); };
+
+    const guidIn = el("input", {type: "number", min: "0", max: "30", step: "0.5", value: it.guidance ?? "", placeholder: String(d.guidance ?? imd.guidance ?? 6.0)});
+    guidIn.onchange = () => { if (guidIn.value !== "") it.guidance = +guidIn.value; else delete it.guidance; bmTouch(); bmRenderItems(); };
+
+    const ffSel = el("select", {},
+      el("option", {value: ""}, `(default: ${d.face_fix === false ? "Off" : "On"})`),
+      el("option", {value: "true"}, "On"),
+      el("option", {value: "false"}, "Off")
+    );
+    ffSel.value = it.face_fix === undefined ? "" : String(!!it.face_fix);
+    ffSel.onchange = () => {
+      if (ffSel.value === "") delete it.face_fix; else it.face_fix = ffSel.value === "true";
+      bmTouch(); bmRenderItems();
+    };
+
+    const refIn = el("input", {value: it.reference || "", placeholder: d.reference || "None", style: "flex:1"});
+    refIn.onchange = () => {
+      const v = refIn.value.trim();
+      if (v) it.reference = v; else { delete it.reference; delete it.reference_strength; }
+      bmTouch(); bmRenderItems();
+    };
+    const refStrIn = el("input", {type: "number", min: "0", max: "1", step: "0.05", value: it.reference_strength ?? (d.reference_strength ?? 0.5), style: "width:68px", title: "Reference strength (0 to 1)"});
+    refStrIn.onchange = () => { it.reference_strength = +refStrIn.value; bmTouch(); };
+
+    const negArea = el("textarea", {rows: "2", placeholder: d.negative ? `(default: ${d.negative})` : "(no negative prompt)"}, it.negative ?? "");
+    negArea.oninput = () => {
+      if (negArea.value.trim()) it.negative = negArea.value; else delete it.negative;
+      bmTouch();
+    };
+
+    const subChips = el("div", {class: "chips"});
+    const subPicks = el("div", {class: "stack"});
+    const hasItemSubs = it.subjects !== undefined;
+    bmRenderSubjectEditor(subChips, subPicks, hasItemSubs ? it.subjects : [], next => {
+      if (next && next.length) it.subjects = next; else delete it.subjects;
+      bmTouch(); bmRenderItems();
+    });
+
+    moreBox.append(
+      el("div", {class: "bitem-grid"},
+        el("div", {}, el("label", {}, "Steps override"), stepsIn),
+        el("div", {}, el("label", {}, "Guidance override"), guidIn),
+        el("div", {}, el("label", {}, "Face fix"), ffSel),
+        el("div", {}, el("label", {}, "Reference strength"), refStrIn)
+      ),
+      el("div", {class: "row"},
+        el("label", {style: "white-space:nowrap"}, "Reference image:"),
+        refIn,
+        el("button", {class: "tiny", onclick: async () => {
+          const r = await api.pick_reference();
+          if (r.error) return log(r.error, "em");
+          if (!r.cancelled) { it.reference = r.path; bmTouch(); bmRenderItems(); }
+        }}, "Pick…"),
+        it.reference ? el("button", {class: "tiny ghost", onclick: () => { delete it.reference; delete it.reference_strength; bmTouch(); bmRenderItems(); }}, "Clear") : ""
+      ),
+      el("div", {},
+        el("div", {class: "row"},
+          el("label", {style: "flex:1"}, "Negative prompt override"),
+          d.negative ? el("button", {class: "tiny ghost", onclick: () => { it.negative = d.negative; bmTouch(); bmRenderItems(); }}, "Copy shared default") : "",
+          it.negative !== undefined ? el("button", {class: "tiny ghost", onclick: () => { delete it.negative; bmTouch(); bmRenderItems(); }}, "Use shared default") : ""
+        ),
+        negArea
+      ),
+      el("div", {},
+        el("div", {class: "row"},
+          el("label", {style: "flex:1"}, hasItemSubs ? "Subjects override for this item:" : `Subjects: using shared default (${asList(d.subjects).map(x => isObj(x) ? `${x.name || x.id} (${x.weight ?? 1})` : x).join(", ") || "none"})`),
+          (d.subjects && d.subjects.length) ? el("button", {class: "tiny ghost", onclick: () => {
+            it.subjects = JSON.parse(JSON.stringify(d.subjects));
+            bmTouch(); bmRenderItems();
+          }}, "Copy shared subjects") : "",
+          hasItemSubs ? el("button", {class: "tiny ghost", onclick: () => { delete it.subjects; bmTouch(); bmRenderItems(); }}, "Use shared default") : ""
+        ),
+        subChips,
+        subPicks
+      )
+    );
+
+    const moveUp = el("button", {class: "tiny ghost", title: "Move item up", disabled: i === 0 ? "disabled" : null, onclick: () => bmMoveItem(i, -1)}, "↑");
+    const moveDown = el("button", {class: "tiny ghost", title: "Move item down", disabled: i === items.length - 1 ? "disabled" : null, onclick: () => bmMoveItem(i, 1)}, "↓");
+    const dupBtn = el("button", {class: "ghost", title: "Duplicate this item", onclick: () => bmDuplicateItem(i)}, "⧉");
+    const delBtn = el("button", {class: "ghost", title: "Remove this item", onclick: () => bmRemoveItem(i)}, "×");
+
+    return el("div", {class: "bitem"},
+      el("div", {class: "bitem-main"},
+        el("div", {class: "bitem-side"},
+          el("span", {class: "bitem-idx"}, `#${i + 1}`),
+          el("div", {class: "bitem-move"}, moveUp, moveDown)
+        ),
+        el("div", {class: "bitem-body"},
+          promptIn,
+          el("div", {class: "bitem-bar"}, nameIn, modelSel, sizeIn, countIn, upSel, seedIn, optBtn)
+        ),
+        el("div", {class: "bitem-acts"}, dupBtn, delBtn)
+      ),
+      moreBox
+    );
+  }));
+}
+
+function bmRender() {
+  $("bmName").value = bm.name || "my-batch";
+  $("bmProblems").replaceChildren(...(bm.problems || []).map(p => el("li", {}, p)));
+  $("bmJsonText").hidden = !bm.jsonMode;
+  $("bmItems").hidden = bm.jsonMode;
+  $("bmJsonToggle").textContent = bm.jsonMode ? "Edit as form" : "Edit as JSON";
+  $("bmExpandAll").textContent = bm.expandAll ? "Options ▴" : "Options ▾";
+  bmFillNegPresets();
+  bmRenderDefaults();
+  if (bm.jsonMode) {
+    $("bmJsonText").value = JSON.stringify(bm.batch, null, 2);
+  } else {
+    bmRenderItems();
+  }
+  bmUpdateHeader();
+}
+
+function bmSyncFromJson() {
+  if (!bm.jsonMode) return true;
+  try {
+    const parsed = JSON.parse($("bmJsonText").value);
+    bm.batch = tidyBatch(Array.isArray(parsed) ? {items: parsed} : parsed);
+    return true;
+  } catch (e) {
+    $("bmStatus").textContent = `Invalid JSON: ${e.message}`;
+    return false;
+  }
+}
+
+function bmMoveItem(index, delta) {
+  const items = bm.batch.items;
+  const target = index + delta;
+  if (target < 0 || target >= items.length) return;
+  [items[index], items[target]] = [items[target], items[index]];
+  bmTouch(); bmRenderItems();
+}
+
+function bmDuplicateItem(index) {
+  const copy = JSON.parse(JSON.stringify(bm.batch.items[index] || {prompt: ""}));
+  if (copy.name) copy.name = `${copy.name}-copy`;
+  bm.batch.items.splice(index + 1, 0, copy);
+  bmTouch(); bmRenderItems();
+}
+
+function bmRemoveItem(index) {
+  bm.batch.items.splice(index, 1);
+  if (!bm.batch.items.length) bm.batch.items.push({prompt: ""});
+  bmTouch(); bmRenderItems();
+}
+
+function bmAddItem() {
+  if (!bmSyncFromJson()) return;
+  bm.jsonMode = false;
+  bm.batch.items.push({prompt: ""});
+  bmTouch(); bmRender();
+  const areas = document.querySelectorAll("#bmItems .bitem-prompt");
+  if (areas.length) areas[areas.length - 1].focus();
+}
+
+function bmCopyFromStudio() {
+  const c = current();
+  const d = bm.batch.defaults;
+  d.model = c.model;
+  d.width = c.width;
+  d.height = c.height;
+  d.steps = c.steps;
+  d.guidance = c.guidance;
+  if (c.count > 1) d.count = c.count; else delete d.count;
+  if (c.seed >= 0) d.seed = c.seed; else delete d.seed;
+  if (c.negative.trim()) d.negative = c.negative.trim(); else delete d.negative;
+  if (c.subjects && c.subjects.length) {
+    d.subjects = c.subjects.map(p => {
+      const s = subjects.find(x => x.id === p.id);
+      const nm = s ? s.name : p.id;
+      return s && p.weight === (s.default_weight || 1.0) ? nm : {name: nm, weight: p.weight};
+    });
+  } else delete d.subjects;
+  if (c.reference) {
+    d.reference = c.reference;
+    d.reference_strength = c.reference_strength;
+    bm.defRefThumb = reference ? {path: reference.path, thumb: reference.thumb} : null;
+  } else {
+    delete d.reference; delete d.reference_strength; bm.defRefThumb = null;
+  }
+  if (c.face_fix === false) d.face_fix = false; else delete d.face_fix;
+  bmTouch(); bmRender();
+  $("bmStatus").textContent = "Copied current settings from the Create tab into Shared defaults.";
+}
+
+function bmAddFromCreate() {
+  const c = current();
+  if (!c.prompt.trim()) {
+    showView("batch");
+    return;
+  }
+  if (!bmSyncFromJson()) {
+    showView("batch");
+    return;
+  }
+  const d = bm.batch.defaults;
+  const isFresh = Object.keys(d).length === 0 && bm.batch.items.every(x => !String(x.prompt || "").trim());
+  if (isFresh) {
+    bmCopyFromStudio();
+    delete bm.batch.defaults.seed;
+    const item = {prompt: c.prompt.trim()};
+    if (c.name.trim()) item.name = c.name.trim();
+    if (c.seed >= 0) item.seed = c.seed;
+    bm.batch.items = [item];
+  } else {
+    const item = {prompt: c.prompt.trim()};
+    if (c.name.trim()) item.name = c.name.trim();
+    const defModelId = d.model || settings.last.model;
+    const defModel = modelById[defModelId] || models[0];
+    const md = defModel ? defModel.defaults : {width: 1024, height: 1024, steps: 30, guidance: 6.0};
+    if (c.model !== defModelId) item.model = c.model;
+    if (c.width !== (d.width || md.width) || c.height !== (d.height || md.height)) {
+      item.width = c.width; item.height = c.height;
+    }
+    if (c.count !== (d.count || 1)) item.count = c.count;
+    if (c.seed >= 0 && c.seed !== d.seed) item.seed = c.seed;
+    if (c.negative.trim() !== (d.negative || "").trim()) item.negative = c.negative.trim();
+    if (bm.batch.items.length === 1 && !String(bm.batch.items[0].prompt || "").trim()) {
+      bm.batch.items[0] = item;
+    } else {
+      bm.batch.items.push(item);
+    }
+  }
+  bmTouch();
+  const n = bmNonEmptyCount();
+  log(`Added to batch (${n} item${n === 1 ? "" : "s"}). Click Batch on the left to edit, save or run.`, "b");
+}
+
+function bmNewBatch() {
+  if (bm.dirty && (bmNonEmptyCount() > 0 || Object.keys(bm.batch.defaults || {}).length > 0)) {
+    if (!confirm("Start a new blank batch? Unsaved changes in the current batch will be cleared.")) return;
+  }
+  bm.path = null;
+  bm.filename = null;
+  bm.name = "my-batch";
+  bm.dirty = false;
+  bm.jsonMode = false;
+  bm.openOpts.clear();
+  bm.problems = [];
+  bm.defRefThumb = null;
+  bm.batch = {defaults: {}, items: [{prompt: ""}]};
+  bmSaveDraft();
+  bmRender();
+  $("bmStatus").textContent = "Started a new blank batch.";
+}
+
+async function bmOpenFile() {
+  const r = await api.open_batch_file(null);
+  if (r.cancelled) return;
+  if (r.error) {
+    $("bmStatus").textContent = r.error;
+    return log(r.error, "em");
+  }
+  bm.path = r.path;
+  bm.filename = r.filename;
+  bm.name = r.name || "batch";
+  bm.dirty = false;
+  bm.jsonMode = false;
+  bm.openOpts.clear();
+  bm.problems = r.problems || [];
+  bm.defRefThumb = null;
+  bm.batch = tidyBatch(r.batch);
+  if (!bm.batch.items.length) bm.batch.items = [{prompt: ""}];
+  bmSaveDraft();
+  bmRender();
+  if (bm.problems.length) {
+    $("bmStatus").textContent = `Loaded ${r.filename} (${bm.batch.items.length} items) with ${bm.problems.length} issue(s) to fix.`;
+  } else {
+    $("bmStatus").textContent = `Loaded ${r.filename} (${bm.batch.items.length} items).`;
+  }
+  log(`Opened batch file ${r.filename} (${bm.batch.items.length} items) in Batch Maker.`);
+}
+
+async function bmSaveFile(saveAs = false) {
+  if (!bmSyncFromJson()) return false;
+  const sname = (bm.filename && !saveAs) ? bm.filename : `${(bm.name || "my-batch").replace(/\.(json|txt)$/i, "")}.json`;
+  const r = await api.save_batch_file(bm.batch, saveAs ? null : bm.path, sname);
+  if (r.cancelled) return false;
+  if (r.error) {
+    $("bmStatus").textContent = r.error;
+    log(r.error, "em");
+    return false;
+  }
+  bm.path = r.path;
+  bm.filename = r.filename;
+  bm.name = r.name || bm.name;
+  bm.dirty = false;
+  bm.problems = r.problems || [];
+  bmSaveDraft();
+  bmRender();
+  $("bmStatus").textContent = bm.problems.length
+    ? `Saved to ${r.filename} (note: ${bm.problems.length} issue(s) to fix before running).`
+    : `Saved to ${r.filename}.`;
+  log(`Saved batch to ${r.filename}.`, "b");
+  return true;
+}
+
+async function bmCheck() {
+  if (!bmSyncFromJson()) return;
+  const r = await api.check_batch(bm.batch);
+  bm.problems = r.problems || [];
+  $("bmProblems").replaceChildren(...bm.problems.map(p => el("li", {}, p)));
+  if (r.ok) {
+    $("bmStatus").textContent = `Batch is valid: ${r.count} item${r.count === 1 ? "" : "s"}, ${r.pictures} picture${r.pictures === 1 ? "" : "s"} ready to run.`;
+  } else {
+    $("bmStatus").textContent = `Found ${bm.problems.length} problem${bm.problems.length === 1 ? "" : "s"}. Fix the items listed above before running.`;
+  }
+}
+
+async function bmRun(saveFirst = false) {
+  if (!bmSyncFromJson()) return;
+  if (saveFirst) {
+    const ok = await bmSaveFile(false);
+    if (!ok) return;
+  }
+  $("bmRun").disabled = $("bmSaveRun").disabled = true;
+  let r;
+  try {
+    r = await api.run_batch(bm.batch, bm.filename || bm.name || "batch");
+  } catch (e) {
+    r = {error: `Something went wrong: ${e && e.message || e}`};
+  } finally {
+    bmUpdateHeader();
+  }
+  if (r.error) {
+    $("bmStatus").textContent = r.error;
+    return log(r.error, "em");
+  }
+  if (r.problems) {
+    bm.problems = r.problems;
+    $("bmProblems").replaceChildren(...bm.problems.map(p => el("li", {}, p)));
+    $("bmStatus").textContent = "Nothing was started. Fix the problems listed above first.";
+    return;
+  }
+  if (r.needs_download) {
+    return askDownload(r.needs_download, () => bmRun(false));
+  }
+  $("bmStatus").textContent = `Batch started: ${r.count} items (${r.pictures} pictures).`;
+  log(`Batch started (${r.name}): ${r.count} items, ${r.pictures} pictures`, "b");
+}
+
+function reviewToBatchMaker() {
+  if (!readReviewText()) return;
+  bm.path = null;
+  bm.filename = null;
+  bm.name = ($("assistantRequest").value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32)) || "assistant-batch";
+  bm.dirty = true;
+  bm.jsonMode = false;
+  bm.openOpts.clear();
+  bm.problems = review.problems || [];
+  bm.batch = JSON.parse(JSON.stringify(review.batch));
+  $("assistantReview").hidden = true;
+  bmSaveDraft();
+  showView("batch");
+  $("bmStatus").textContent = `Loaded ${bm.batch.items.length} items from Assistant. You can edit, save to a file or run.`;
+}
+
+function bindBatchMaker() {
+  bmLoadDraft();
+  bmUpdateHeader();
+  const d = () => bm.batch.defaults;
+  $("bmName").onchange = () => { bm.name = $("bmName").value.trim() || "my-batch"; bmSaveDraft(); };
+  $("bmNew").onclick = bmNewBatch;
+  $("bmOpen").onclick = bmOpenFile;
+  $("bmQuickRun").onclick = loadBatch;
+  $("bmSave").onclick = () => bmSaveFile(false);
+  $("bmSaveAs").onclick = () => bmSaveFile(true);
+  $("bmFromStudio").onclick = bmCopyFromStudio;
+  $("bmClearDefaults").onclick = () => {
+    bm.batch.defaults = {}; bm.defRefThumb = null;
+    bmTouch(); bmRender();
+    $("bmStatus").textContent = "Cleared shared defaults.";
+  };
+
+  $("bmDefModel").onchange = () => {
+    if ($("bmDefModel").value) d().model = $("bmDefModel").value; else delete d().model;
+    bmTouch(); bmRenderDefaults(); bmRenderItems();
+  };
+  document.querySelectorAll("#bmDefAspects button").forEach(b => b.onclick = () => {
+    const [w, h] = b.dataset.wh.split("x").map(Number);
+    d().width = w; d().height = h;
+    bmTouch(); bmRenderDefaults(); bmRenderItems();
+  });
+  const bindDefNum = (id, key, isFloat = false) => {
+    $(id).onchange = () => {
+      const v = $(id).value.trim();
+      if (v !== "") d()[key] = isFloat ? parseFloat(v) : parseInt(v, 10);
+      else delete d()[key];
+      bmTouch(); bmRenderItems();
+    };
+  };
+  bindDefNum("bmDefWidth", "width");
+  bindDefNum("bmDefHeight", "height");
+  bindDefNum("bmDefCount", "count");
+  bindDefNum("bmDefSteps", "steps");
+  bindDefNum("bmDefGuidance", "guidance", true);
+  bindDefNum("bmDefSeed", "seed");
+
+  $("bmDefUpscale").onchange = () => {
+    const v = $("bmDefUpscale").value;
+    if (v === "custom") {
+      $("bmDefUpPxWrap").hidden = false;
+      const px = parseInt($("bmDefUpPx").value, 10) || 2400;
+      $("bmDefUpPx").value = String(px);
+      d().upscale = `${px}px`;
+    } else if (v) {
+      $("bmDefUpPxWrap").hidden = true;
+      d().upscale = v;
+    } else {
+      $("bmDefUpPxWrap").hidden = true;
+      delete d().upscale;
+    }
+    bmTouch(); bmRenderItems();
+  };
+  $("bmDefUpPx").onchange = () => {
+    const px = parseInt($("bmDefUpPx").value, 10);
+    if (px) d().upscale = `${px}px`; else delete d().upscale;
+    bmTouch(); bmRenderItems();
+  };
+  $("bmDefNegative").oninput = () => {
+    const v = $("bmDefNegative").value;
+    if (v.trim()) d().negative = v; else delete d().negative;
+    bmTouch();
+  };
+  $("bmDefFaceFix").onchange = () => {
+    if ($("bmDefFaceFix").checked) delete d().face_fix; else d().face_fix = false;
+    bmTouch(); bmRenderItems();
+  };
+  $("bmDefRefPath").onchange = () => {
+    const v = $("bmDefRefPath").value.trim();
+    if (v) d().reference = v; else { delete d().reference; delete d().reference_strength; bm.defRefThumb = null; }
+    bmTouch(); bmRenderDefaults(); bmRenderItems();
+  };
+  $("bmDefPickRef").onclick = async () => {
+    const r = await api.pick_reference();
+    if (r.error) return log(r.error, "em");
+    if (!r.cancelled) {
+      d().reference = r.path;
+      d().reference_strength = +$("bmDefRefStrength").value || 0.5;
+      bm.defRefThumb = {path: r.path, thumb: r.thumb};
+      bmTouch(); bmRenderDefaults(); bmRenderItems();
+    }
+  };
+  $("bmDefClearRef").onclick = () => {
+    delete d().reference; delete d().reference_strength; bm.defRefThumb = null;
+    bmTouch(); bmRenderDefaults(); bmRenderItems();
+  };
+  $("bmDefRefStrength").onchange = () => {
+    if (d().reference) d().reference_strength = +$("bmDefRefStrength").value;
+    bmTouch(); bmRenderItems();
+  };
+
+  $("bmAddItem").onclick = bmAddItem;
+  $("bmBulkToggle").onclick = () => {
+    $("bmBulkBox").hidden = !$("bmBulkBox").hidden;
+    if (!$("bmBulkBox").hidden) $("bmBulkText").focus();
+  };
+  $("bmBulkCancel").onclick = () => { $("bmBulkBox").hidden = true; };
+  $("bmBulkAdd").onclick = () => {
+    if (!bmSyncFromJson()) return;
+    const lines = $("bmBulkText").value.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+    if (!lines.length) return;
+    if (bm.batch.items.length === 1 && !String(bm.batch.items[0].prompt || "").trim()) {
+      bm.batch.items = lines.map(p => ({prompt: p}));
+    } else {
+      bm.batch.items.push(...lines.map(p => ({prompt: p})));
+    }
+    $("bmBulkText").value = "";
+    $("bmBulkBox").hidden = true;
+    bm.jsonMode = false;
+    bmTouch(); bmRender();
+    $("bmStatus").textContent = `Added ${lines.length} prompt line${lines.length === 1 ? "" : "s"}.`;
+  };
+  $("bmExpandAll").onclick = () => {
+    bm.expandAll = !bm.expandAll;
+    if (!bm.expandAll) bm.openOpts.clear();
+    bmRender();
+  };
+  $("bmJsonToggle").onclick = () => {
+    if (bm.jsonMode && !bmSyncFromJson()) return;
+    bm.jsonMode = !bm.jsonMode;
+    bmRender();
+  };
+  $("bmJsonText").oninput = () => bmTouch();
+  $("bmCheck").onclick = bmCheck;
+  $("bmSaveRun").onclick = () => bmRun(true);
+  $("bmRun").onclick = () => bmRun(false);
+}
+
+// ---------- video maker (text-to-video and image-to-video) ----------
+let vidImage = null;   // {path, thumb, name}
+const VID_ASPECTS = {"16:9": [16, 9], "9:16": [9, 16], "1:1": [1, 1]};
+
+function vidFillNegPresets() {
+  const sel = $("vidNegPreset");
+  if (!sel || !settings) return;
+  sel.replaceChildren(el("option", {value: ""}, "Presets…"),
+    ...(settings.last.negatives || []).map((n, i) => el("option", {value: String(i)}, n.name)));
+  sel.onchange = () => {
+    if (sel.value !== "") {
+      $("vidNegative").value = settings.last.negatives[+sel.value].text;
+    }
+    sel.value = "";
+  };
+}
+
+function drawVidImage() {
+  const t = $("vidImgThumb");
+  if (!t) return;
+  if (vidImage) {
+    t.style.backgroundImage = `url("${vidImage.thumb}")`;
+    t.textContent = "";
+    t.title = vidImage.name || vidImage.path;
+  } else {
+    t.style.backgroundImage = "";
+    t.textContent = "none";
+    t.title = "";
+  }
+}
+
+function vidTokenCount() {
+  const t = ($("vidPrompt").value.match(/[A-Za-z0-9']+|[^\sA-Za-z0-9]/g) || []);
+  $("vidPromptCount").textContent = `~${t.length} tokens`;
+}
+
+function vidSummary() {
+  const m = modelById[$("vidModel").value];
+  const w = +$("vidWidth").value || 704, h = +$("vidHeight").value || 480;
+  const f = +$("vidFrames").value || 49, fps = Math.max(1, +$("vidFps").value || 24);
+  const secs = (f / fps).toFixed(1);
+  $("vidDurationInfo").textContent = `${f} frames at ${fps} fps (~${secs} s clip)`;
+  $("vidSummary").textContent = `${w} × ${h} · ${f} frames @ ${fps} fps (~${secs} s) · ${m ? m.name : ""}`;
+}
+
+function showVidModel() {
+  const m = modelById[$("vidModel") && $("vidModel").value];
+  if (!m) return;
+  $("vidModelDesc").textContent = m.description || "";
+  $("vidModelMode").textContent = m.t2v && m.i2v ? "Text & Image → Video" : m.i2v ? "Image → Video only" : "Text → Video";
+  $("vidModelLicense").textContent = {commercial: "commercial use OK", conditions: "free with conditions", nc: "personal use only"}[m.license] || m.license;
+  $("vidModelLicense").className = "tag" + (m.license === "nc" ? " nc" : "");
+  const fit = {ok: "", tight: " · may be slow on this card", too_big: ` · needs ${m.min_vram_gb} GB of video memory`}[m.fit] || "";
+  $("vidModelState").textContent = (m.downloaded ? "on disk" : `${m.size_gb} GB to download`) + fit;
+  $("vidModelState").style.color = m.fit === "too_big" ? "var(--bad)" : m.fit === "tight" ? "var(--warn)" : "";
+  $("vidBtnGuide").disabled = !m.guide;
+  $("vidPickImg").disabled = $("vidUseCurrent").disabled = !m.i2v;
+  if (m.i2v && m.t2v) {
+    $("vidImgNote").textContent = "Optional starting frame. Leave empty for Text-to-Video, or pick an image to animate it.";
+  } else if (m.i2v) {
+    $("vidImgNote").textContent = "Required starting frame for this model (Image-to-Video).";
+  } else {
+    $("vidImgNote").textContent = "This model generates video from text only (no starting image).";
+  }
+  vidSummary();
+  vidTokenCount();
+}
+
+function vidRecommended() {
+  const m = modelById[$("vidModel").value];
+  if (!m) return;
+  const d = m.defaults || {};
+  $("vidWidth").value = d.width || 704;
+  $("vidHeight").value = d.height || 480;
+  $("vidFrames").value = d.frames || 49;
+  $("vidFps").value = d.fps || 24;
+  setSlider("vidSteps", d.steps ?? 30);
+  setSlider("vidGuidance", d.guidance ?? 3.0);
+  document.querySelectorAll("#vidAspect button").forEach(b => b.classList.toggle("on", b.dataset.va === "16:9"));
+  vidSummary();
+}
+
+function vidRender() {
+  vidFillNegPresets();
+  drawVidImage();
+  showVidModel();
+}
+
+async function animateImage(path) {
+  if (!path) return;
+  const r = await api.image(path);
+  if (r.error || r.media === "video") return log(r.error || "Pick a still image to animate.", "em");
+  vidImage = {path, thumb: r.data, name: r.name};
+  const curVid = modelById[$("vidModel").value];
+  if (!curVid || !curVid.i2v) {
+    const i2vModel = videoModels().find(m => m.i2v && m.downloaded) || videoModels().find(m => m.i2v);
+    if (i2vModel) {
+      $("vidModel").value = i2vModel.id;
+      vidRecommended();
+    }
+  }
+  if (r.recipe && r.recipe.prompt && !$("vidPrompt").value.trim()) {
+    $("vidPrompt").value = r.recipe.prompt;
+  }
+  drawVidImage();
+  showView("video");
+  log(`Loaded ${r.name} as starting image in Video tab.`);
+}
+
+async function generateVideo() {
+  const payload = {
+    model: $("vidModel").value,
+    prompt: $("vidPrompt").value,
+    negative: $("vidNegative").value,
+    name: $("vidName").value,
+    width: +$("vidWidth").value,
+    height: +$("vidHeight").value,
+    frames: +$("vidFrames").value,
+    fps: +$("vidFps").value,
+    steps: +$("vidSteps").value,
+    guidance: +$("vidGuidance").value,
+    seed: $("vidRandomSeed").checked ? -1 : +$("vidSeed").value,
+    image: vidImage && modelById[$("vidModel").value] && modelById[$("vidModel").value].i2v ? vidImage.path : null,
+  };
+  api.save_settings({vid_model: payload.model});
+  const r = await api.generate_video(payload);
+  if (r.error) return log(r.error, "em");
+  if (r.needs_download) return askDownload(r.needs_download, generateVideo);
+  if (r.width) {
+    $("vidWidth").value = r.width;
+    $("vidHeight").value = r.height;
+    $("vidFrames").value = r.frames;
+    $("vidFps").value = r.fps;
+    vidSummary();
+  }
+  log(`Generating video (${r.width}×${r.height}, ${r.frames} frames @ ${r.fps} fps)…`, "b");
+}
+
+function bindVideoMaker() {
+  vidRecommended();
+  $("vidModel").onchange = () => { showVidModel(); vidRecommended(); api.save_settings({vid_model: $("vidModel").value}); };
+  $("vidBtnGuide").onclick = () => api.model_guide($("vidModel").value);
+  $("vidBtnModels").onclick = modelsModal;
+  $("vidPickImg").onclick = async () => {
+    const r = await api.pick_reference();
+    if (r.error) return log(r.error, "em");
+    if (!r.cancelled) { vidImage = r; drawVidImage(); }
+  };
+  $("vidUseCurrent").onclick = () => {
+    if (!selectedPath) return log("Select a picture in the Recent strip first.", "em");
+    animateImage(selectedPath);
+  };
+  $("vidClearImg").onclick = () => { vidImage = null; drawVidImage(); };
+  document.querySelectorAll("#vidAspect button").forEach(b => b.onclick = () => {
+    document.querySelectorAll("#vidAspect button").forEach(x => x.classList.toggle("on", x === b));
+    const m = modelById[$("vidModel").value];
+    const [aw, ah] = VID_ASPECTS[b.dataset.va];
+    const longEdge = m ? Math.max(m.defaults.width || 704, m.defaults.height || 480) : 704;
+    const step = m && m.family === "svd" ? 64 : m && m.family === "ltx" ? 32 : 16;
+    const scale = longEdge / Math.max(aw, ah);
+    $("vidWidth").value = Math.max(256, Math.round(aw * scale / step) * step);
+    $("vidHeight").value = Math.max(256, Math.round(ah * scale / step) * step);
+    vidSummary();
+  });
+  ["vidWidth", "vidHeight", "vidFrames", "vidFps"].forEach(id => $(id).onchange = vidSummary);
+  $("vidRecommended").onclick = vidRecommended;
+  ["vidSteps", "vidGuidance"].forEach(id => $(id).oninput = () => setSlider(id, $(id).value));
+  $("vidRandomSeed").onchange = () => { $("vidSeed").disabled = $("vidRandomSeed").checked; };
+  $("vidPrompt").oninput = vidTokenCount;
+  $("vidClearPrompt").onclick = () => { $("vidPrompt").value = ""; vidTokenCount(); };
+  $("vidClearNeg").onclick = () => { $("vidNegative").value = ""; };
+  $("btnGenerateVideo").onclick = generateVideo;
+}
+
 // ---------- assistant (phase 4): a cloud AI writes a batch, the user checks it, Go runs it ----------
 async function hfSettings(box) {
   const st = await api.hf_token_status();
@@ -672,7 +1693,7 @@ function renderReview() {
   $("reviewTextToggle").textContent = review.text ? "Edit as lines" : "Edit as text";
   if (review.text) { $("reviewText").value = JSON.stringify(review.batch, null, 2); return reviewGoState(); }
   const fallback = modelById[d.model] || modelById[settings.last.model];
-  const usable = models.filter(m => m.downloaded);
+  const usable = imageModels().filter(m => m.downloaded);
   const modelOpts = (it) => el("select", {onchange: e => setField(it, "model", e.target.value)},
     el("option", {value: ""}, `(${fallback ? fallback.name : "current model"})`),
     ...usable.map(m => el("option", {value: m.id, selected: it.model === m.id ? "selected" : null}, m.name)),
@@ -742,6 +1763,7 @@ async function poll() {
     for (const e of evs) {
       lastSeq = e.seq;
       if (e.kind === "image") { log(`saved ${e.path.split(/[\\/]/).pop()}`, "b"); show(e.path); refreshGallery(true); }
+      else if (e.kind === "video") { log(`saved video ${e.path.split(/[\\/]/).pop()}`, "b"); show(e.path); refreshGallery(true); }
       else if (e.kind === "item_failed") log(`item ${e.index} failed: ${e.error}`, "em");
       else if (e.kind === "model_failed") log(`item ${e.index} skipped: ${e.error}`, "em");
       else if (e.kind === "model_loading") log(`Loading ${modelById[e.model] ? modelById[e.model].name : e.model}…`);
@@ -758,8 +1780,8 @@ async function poll() {
         progress.step = e.step; progress.steps = e.steps;
         if (e.kind === "train_step") progress.trainEta = e.eta_s;
       }
-      if (e.kind === "image" || e.kind === "upscaled") { progress.step = 0; progress.steps = 0; }
-      if (e.kind === "step") $("statusLine").textContent = `image ${e.index}: step ${e.step} of ${e.steps}`;
+      if (e.kind === "image" || e.kind === "video" || e.kind === "upscaled") { progress.step = 0; progress.steps = 0; }
+      if (e.kind === "step") $("statusLine").textContent = `step ${e.step} of ${e.steps}`;
       else if (e.kind === "train_step") $("statusLine").textContent = `training ${e.subject}: step ${e.step} of ${e.steps}` + (e.eta_s != null ? `, about ${Math.ceil(e.eta_s / 60)} min left` : "");
       else if (e.kind === "training") log(`Training ${e.subject}…`);
       else if (e.kind === "trained") { log(`${e.subject} is trained and ready in the Subjects panel.`, "b"); loadSubjects(); }
@@ -827,9 +1849,22 @@ async function show(path) {
   if (r.error) return;
   selectedPath = path;
   $("previewEmpty").hidden = true;
-  $("previewImg").src = r.data; $("previewImg").hidden = false;
+  if (r.media === "video") {
+    $("previewImg").hidden = true;
+    $("previewVideo").src = r.data; $("previewVideo").hidden = false;
+    $("btnPreviewUp").hidden = true;
+    $("btnPreviewAnim").hidden = true;
+    $("vidPreviewEmpty").hidden = true;
+    $("vidPreviewVideo").src = r.data; $("vidPreviewVideo").hidden = false;
+    $("vidPreviewCaption").textContent = r.name; $("vidPreviewCaption").hidden = false;
+    $("vidLastInfo").textContent = r.recipe ? `${r.recipe.model_name} · seed ${r.recipe.seed} · ${r.recipe.steps} steps` : "";
+  } else {
+    $("previewVideo").pause(); $("previewVideo").removeAttribute("src"); $("previewVideo").hidden = true;
+    $("previewImg").src = r.data; $("previewImg").hidden = false;
+    $("btnPreviewUp").hidden = false;
+    $("btnPreviewAnim").hidden = false;
+  }
   $("previewCaption").textContent = r.name; $("previewCaption").hidden = false;
-  $("btnPreviewUp").hidden = false;
   $("lastInfo").textContent = r.recipe ? `${r.recipe.model_name} · seed ${r.recipe.seed} · ${r.recipe.steps} steps` : "";
   document.querySelectorAll(".thumb").forEach(t => t.classList.toggle("sel", t.dataset.path === path));
 }
@@ -849,11 +1884,15 @@ async function refreshGallery(force) {
     t.style.backgroundImage = `url("${it.thumb}")`;
     if (it.width && it.height) t.style.aspectRatio = `${it.width} / ${it.height}`;
     if (it.upscaled) t.append(el("span", {class: "badge"}, it.upscaled.toUpperCase()));
+    if (it.media === "video") t.append(el("span", {class: "vbadge"}, "▶ MP4"));
     if (picked.includes(it.path)) t.classList.add("multi");
     t.onclick = e => pick(it.path, e);
     const acts = el("div", {class: "acts"},
       el("button", {title: "Same recipe", onclick: e => { e.stopPropagation(); remake(it.path, false); }}, "Re-make"),
-      el("button", {title: "Upscale with the Upscale panel's size", onclick: e => { e.stopPropagation(); upscale([it.path]); }}, "Up"),
+      ...(it.media === "video" ? [] : [
+        el("button", {title: "Upscale with the Upscale panel's size", onclick: e => { e.stopPropagation(); upscale([it.path]); }}, "Up"),
+        el("button", {title: "Animate this picture in the Video tab", onclick: e => { e.stopPropagation(); animateImage(it.path); }}, "Anim"),
+      ]),
       el("button", {title: "Same recipe, new seed", onclick: e => { e.stopPropagation(); remake(it.path, true); }}, "Vary"),
       el("button", {title: "Copy prompt, open folder, load settings", onclick: e => { e.stopPropagation(); itemMenu(it); }}, "⋯"));
     t.append(acts);
@@ -901,20 +1940,38 @@ async function itemMenu(it) {
       el("button", {onclick: () => api.open_output(it.path)}, "Open folder"))));
 }
 function loadRecipe(r) {
-  if (modelById[r.model_id]) $("model").value = r.model_id;
+  const m = modelById[r.model_id];
+  if (m && m.kind === "video") {
+    $("vidModel").value = r.model_id;
+    showVidModel();
+    $("vidPrompt").value = r.prompt || "";
+    $("vidNegative").value = r.negative || "";
+    $("vidWidth").value = r.width || m.defaults.width || 704;
+    $("vidHeight").value = r.height || m.defaults.height || 480;
+    if (r.extra && r.extra.frames) $("vidFrames").value = r.extra.frames;
+    if (r.extra && r.extra.fps) $("vidFps").value = r.extra.fps;
+    setSlider("vidSteps", r.steps || m.defaults.steps || 30);
+    setSlider("vidGuidance", r.guidance ?? m.defaults.guidance ?? 3.0);
+    $("vidRandomSeed").checked = false; $("vidSeed").disabled = false; $("vidSeed").value = r.seed;
+    $("modal").hidden = true;
+    showView("video");
+    vidSummary(); vidTokenCount();
+    return;
+  }
+  if (m) $("model").value = r.model_id;
   showModel();
   $("prompt").value = r.prompt; $("negative").value = r.negative;
   $("width").value = r.width; $("height").value = r.height;
   setSlider("steps", r.steps); setSlider("guidance", r.guidance);
   $("randomSeed").checked = false; $("seed").disabled = false; $("seed").value = r.seed;
-  $("modal").hidden = true; tokenCount(); summary(); remember();
+  $("modal").hidden = true; showView("create"); tokenCount(); summary(); remember();
 }
 
 // ---------- modals: models, storage, help ----------
 function modal(title, body) { $("modalTitle").textContent = title; $("modalBody").replaceChildren(body); $("modal").hidden = false; }
 async function modelsModal() {
   await loadModels();
-  const fams = ["sdxl", "sd15", "sd3", "flux", "flux2", "playground", "zimage"];
+  const fams = ["sdxl", "sd15", "sd3", "flux", "flux2", "playground", "zimage", "ltx", "wan", "cogvideo", "svd"];
   const form = el("div", {class: "stack", style: "margin-top:14px"},
     el("h3", {}, "Add a model"),
     el("div", {class: "row"}, el("select", {id: "addKind"}, el("option", {value: "hf"}, "Hugging Face id (owner/name)"), el("option", {value: "file"}, ".safetensors file path")),
@@ -927,7 +1984,7 @@ async function modelsModal() {
         if (r.error) return alert(r.error);
         log(`Added model ${$("addName").value}`, "b"); await loadModels(r.id); modelsModal();
       }}, "Add")),
-    el("p", {class: "desc"}, "Family: SDXL for most community photo models, SD 1.5 for older 512-pixel ones. Check the model's page if unsure."));
+    el("p", {class: "desc"}, "Family: SDXL for most community photo models, SD 1.5 for older 512-pixel ones, or ltx / wan / cogvideo / svd for video models. Check the model's page if unsure."));
   const table = el("table", {}, el("tr", {}, el("th", {}, "Model"), el("th", {}, "Licence"), el("th", {}, "Status"), el("th", {}, "")),
     ...models.map(m => el("tr", {}, el("td", {}, el("b", {}, m.name), el("div", {class: "desc"}, m.description || "")),
       el("td", {}, m.license), el("td", {}, m.downloaded ? "on disk" : `${m.size_gb} GB`),
@@ -950,14 +2007,17 @@ function helpModal() {
   modal("Guide", el("div", {},
     el("p", {}, "Write a prompt, pick a model, press Generate or Ctrl+Enter. Every image is saved to the output folder with a matching .json recipe; Re-make and Vary in the strip below use it."),
     el("p", {}, "Thinking (steps): more steps = more detail, slower. Turbo models need only 4 to 8. Guidance: how strictly it follows the prompt. Recommended settings resets both for the chosen model."),
+    el("h3", {}, "Video (Text-to-Video and Image-to-Video)"),
+    el("p", {}, "Click ▶ Video on the left to generate .mp4 video clips locally on your GPU using Hugging Face video models (LTX-Video 2B, Wan 2.1 1.3B, CogVideoX 2B, and Stable Video Diffusion XT / XT 1.1). Click Animate this on any picture in the preview (or Anim on a thumbnail) to send that picture straight to the Video tab as a starting frame."),
     el("h3", {}, "Assistant"),
     el("p", {}, "Type what you want in the Assistant panel (\"20 space sci-fi pictures, upscaled to 1080p\") and press Write batch. The AI you picked in Settings > Assistant writes the batch; you check every line, change or remove lines, or type how to change it and press Revise. Nothing runs until you press Go. Only your typed text goes to the AI, never pictures or photos."),
     el("h3", {}, "Subjects (you, family, pets, the car)"),
     el("p", {}, "Click a trained subject in the Subjects panel, then write its name in the prompt (\"Alex hiking at sunset\"). Likeness 1.0 is the default; lower is looser, higher is stronger."),
     el("p", {}, "Tip for pictures of one person: add \"alone\" or \"solo\", or describe a closer shot (\"waist-up photo of Alex at a wedding\"). Wide scenes make the model invent extra people and it may give the main role to a stranger."),
     el("p", {}, "Click to fix: click any face (or a pet) in the preview and pick who it should be. That spot is redrawn as them and saved as a new file beside the original (..._fix)."),
-    el("h3", {}, "Batch files"),
-    el("p", {}, "Load batch takes a .txt file (one prompt per line, # for comments) or a .json file:"),
+    el("h3", {}, "Batch Maker and batch files"),
+    el("p", {}, "Click Batch on the left to open the in-app Batch Maker: set shared defaults (model, size, negative prompt, subjects, upscale), add or reorder prompt items, or click + Batch next to Generate on the Create tab to send prompts over. Click Open file… to load and edit any existing .json or .txt batch file, Save / Save as… to write it to disk, and Run batch (or Save & Run) to execute it."),
+    el("p", {}, "A batch file can be a .txt file (one prompt per line, # for comments) or a .json file:"),
     el("pre", {}, `{"defaults": {"model": "realvis-v5", "width": 1344, "height": 768},
  "items": [
   {"prompt": "a dinosaur in a swamp", "name": "dino"},
@@ -1031,24 +2091,36 @@ async function start() {
   $("refStrength").oninput = () => { $("refStrengthOut").textContent = (+$("refStrength").value).toFixed(2); };
   await loadSubjects();
   $("btnPreviewUp").onclick = () => selectedPath && upscale([selectedPath]);
+  $("btnPreviewAnim").onclick = () => selectedPath && animateImage(selectedPath);
   $("btnGenerate").onclick = generate;
+  $("btnAddBatch").onclick = bmAddFromCreate;
   $("btnAssistant").onclick = assistantWrite;
   $("reviewClose").onclick = () => { $("assistantReview").hidden = true; };
+  $("reviewToBatch").onclick = reviewToBatchMaker;
   $("reviewGo").onclick = reviewGo;
   $("reviewRevise").onclick = reviewRevise;
   $("reviewAdd").onclick = () => { if (!readReviewText()) return; review.text = false; review.batch.items.push({prompt: ""}); renderReview(); };
   $("reviewText").oninput = reviewEdited;      // a fix typed as text must be able to turn Go back on
   $("reviewTextToggle").onclick = () => { if (!readReviewText()) return; review.text = !review.text; renderReview(); };
+  bindBatchMaker();
+  bindVideoMaker();
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && e.shiftKey && (e.key === "B" || e.key === "b")) { e.preventDefault(); reportOpen(); return; }
-    if (e.ctrlKey && e.key === "Enter" && $("report").hidden && $("assistantReview").hidden) { e.preventDefault(); generate(); }
+    if (e.ctrlKey && (e.key === "s" || e.key === "S") && !$("batchMaker").hidden && $("report").hidden && $("assistantReview").hidden) {
+      e.preventDefault(); bmSaveFile(e.shiftKey); return;
+    }
+    if (e.ctrlKey && e.key === "Enter" && $("report").hidden && $("assistantReview").hidden) {
+      if (!$("work").hidden) { e.preventDefault(); generate(); }
+      else if (!$("videoMaker").hidden) { e.preventDefault(); generateVideo(); }
+    }
     if (e.key === "Escape") { $("modal").hidden = true; $("moreMenu").hidden = true; $("report").hidden = true; $("assistantReview").hidden = true; }
   });
   $("navReport").onclick = reportOpen;
   $("busyReport").onclick = reportOpen;
   $("reportSave").onclick = reportSave;
   $("reportClose").onclick = () => { $("report").hidden = true; };
-  $("navBatch").onclick = loadBatch;
+  $("navVideo").onclick = () => showView("video");
+  $("navBatch").onclick = () => showView("batch");
   $("navFiles").onclick = () => api.open_output(null);
   $("navTheme").onclick = () => { settings.theme = settings.theme === "dark" ? "light" : "dark"; applyTheme(); api.save_settings({theme: settings.theme}); };
   $("navSettings").onclick = settingsModal;
@@ -1061,7 +2133,7 @@ async function start() {
   $("navModels").onclick = modelsModal;
   $("navStorage").onclick = storageModal;
   $("navGuide").onclick = helpModal;
-  $("navCreate").onclick = () => { $("modal").hidden = true; };
+  $("navCreate").onclick = () => showView("create");
   $("btnExpand").onclick = () => { const p = document.querySelector(".prompts"); p.classList.toggle("big"); $("btnExpand").textContent = p.classList.contains("big") ? "Shrink" : "Expand"; };
   $("btnClear").onclick = () => $("log").replaceChildren();
   $("modalClose").onclick = () => { $("modal").hidden = true; };
