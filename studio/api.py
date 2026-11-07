@@ -23,6 +23,7 @@ from studio.hfget import FetchError, download_patterns  # noqa: F401 (download_p
 from studio.engine import GenRequest, LIKENESS_FAMILIES, MAX_SUBJECTS
 from studio.naming import IMAGE_EXT, MEDIA_EXT, slugify, subject_from_prompt
 from studio.recipe import read_recipe
+from studio.registry import PROMPT_TOKENS
 from studio.settings import save_settings
 from studio.providers import PROVIDERS, ProviderError
 from studio.upscale import parse_choice
@@ -158,7 +159,7 @@ class Api:
                         "description": m.description, "defaults": m.defaults, "size_gb": m.size_gb,
                         "downloaded": self._registry.is_downloaded(m.id), "user": m.user,
                         "guide": f"https://huggingface.co/{m.source['hf']}" if "hf" in m.source else None,
-                        "min_vram_gb": m.min_vram_gb, "fit": hardware.fits(m.min_vram_gb, self._gpu())})
+                        "min_vram_gb": m.min_vram_gb, "prompt_tokens": PROMPT_TOKENS.get(m.family), "fit": hardware.fits(m.min_vram_gb, self._gpu())})
         return out
 
     def _gpu(self):

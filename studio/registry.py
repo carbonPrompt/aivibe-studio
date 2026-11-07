@@ -19,6 +19,10 @@ FAMILIES = {
     "svd": ("StableVideoDiffusionPipeline", 25, 3.0, 1024),
 }
 LICENSES = {"commercial", "conditions", "nc"}
+# How many prompt tokens each image family actually reads (diffusers defaults; Schnell was trained on 256).
+# CLIP-only families stop at 77 including the start and end markers, so 75 words-and-marks.
+PROMPT_TOKENS = {"sd15": 75, "sdxl": 75, "playground": 75, "sd3": 256, "flux": 256, "flux2": 512, "zimage": 512}
+CLIP_ONLY_FAMILIES = {"sd15", "sdxl", "playground"}
 
 
 @dataclass

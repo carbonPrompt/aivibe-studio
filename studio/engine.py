@@ -10,6 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 from studio.gpu import other_job_running
+from studio.registry import CLIP_ONLY_FAMILIES
 from studio.upscale import upscale_image
 from studio.video import (VIDEO_FAMILIES, VIDEO_I2V_FAMILIES, VIDEO_T2V_FAMILIES, VideoRequest, snap_video_params,
                           to_pil_frames)
@@ -36,10 +37,11 @@ def _stopper(cancel):
     return cb
 
 
-def warn_truncation(pipe, prompt: str, what: str = "prompt") -> None:
-    """CLIP reads 77 tokens; diffusers drops the rest with only a console message. Say so in the log."""
+def warn_truncation(pipe, prompt: str, what: str = "prompt", family: str | None = None) -> None:
+    """CLIP reads 77 tokens; diffusers drops the rest with only a console message. Say so in the log.
+    Only for CLIP-only families: SD3/FLUX/Z-Image read the long prompt through their T5/Qwen encoder."""
     tok = getattr(pipe, "tokenizer", None)
-    if tok is None or not prompt:
+    if tok is None or not prompt or (family is not None and family not in CLIP_ONLY_FAMILIES):
         return
     try:
         ids = tok(prompt, truncation=False).input_ids
@@ -119,7 +121,7 @@ class Runner:
         crop = img.crop(region).resize((1024, 1024), Image.LANCZOS)
         log.info("redraw region %s of %dx%d (crop %dx%d -> 1024), strength %s, seed %d, prompt %r",
                  region, img.width, img.height, region[2] - region[0], region[3] - region[1], strength, seed, prompt)
-        warn_truncation(self.pipe, prompt, "fix prompt")
+        warn_truncation(self.pipe, prompt, "fix prompt", self.entry.family)
         kw = dict(prompt=prompt, image=crop, strength=strength, num_inference_steps=max(steps, 25),
                   guidance_scale=guidance, generator=torch.Generator("cpu").manual_seed(seed),
                   callback_on_step_end=_stopper(cancel))
@@ -170,9 +172,9 @@ class Runner:
                   guidance_scale=req.guidance, generator=g, callback_on_step_end=cb)
         if req.negative and self.entry.family in NEGATIVE_FAMILIES:
             kw["negative_prompt"] = req.negative
-        warn_truncation(self.pipe, req.prompt)
+        warn_truncation(self.pipe, req.prompt, family=self.entry.family)
         if req.negative and "negative_prompt" in kw:
-            warn_truncation(self.pipe, req.negative, "negative prompt")
+            warn_truncation(self.pipe, req.negative, "negative prompt", self.entry.family)
         if self._ip:
             from PIL import Image
             ref = Image.open(self._reference).convert("RGB") if self._reference else Image.new("RGB", (224, 224))

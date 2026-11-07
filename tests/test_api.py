@@ -843,6 +843,13 @@ def test_models_include_video_capabilities(api):
     assert by_id["svd-xt"]["kind"] == "video" and by_id["svd-xt"]["i2v"] and not by_id["svd-xt"]["t2v"]
 
 
+def test_models_carry_their_prompt_length(api):
+    by_id = {m["id"]: m for m in api.models()}
+    assert by_id["realvis-v5"]["prompt_tokens"] == 75 and by_id["z-image-turbo"]["prompt_tokens"] == 512
+    assert by_id["flux2-klein-4b"]["prompt_tokens"] == 512 and by_id["sd35-medium"]["prompt_tokens"] == 256
+    assert by_id["ltx-video"]["prompt_tokens"] is None
+
+
 def test_generate_video_validates_and_submits(api, tmp_path):
     # Mark ltx-video and svd-xt as downloaded
     for mid in ("ltx-video", "svd-xt", "wan-t2v-1.3b"):

@@ -155,3 +155,10 @@ def test_brief_names_the_fallback_model_and_list_shapes(reg, store):
     b = brief(reg, store, "realvis-v5")
     assert "Items without a model use realvis-v5 (RealVisXL V5.0, family sdxl)." in b
     assert '"subjects": ["Name"]' in b
+
+
+def test_brief_gives_each_model_its_prompt_length(reg):
+    from studio.registry import PROMPT_TOKENS
+    assert PROMPT_TOKENS["zimage"] == 512 and PROMPT_TOKENS["sdxl"] == 75
+    b = brief(reg, None)
+    assert "reads 512 prompt tokens" in b and "reads 75 prompt tokens" in b and "full paragraph" in b

@@ -6,7 +6,6 @@ let picked = [], galleryPaths = [], anchor = null, upChoice = "4x";
 let subjects = [], subjectPicks = [], reference = null;
 let progress = {step: 0, steps: 0, trainEta: null, text: ""};   // latest step/tile/train event for the busy window   // subjectPicks: [{id, weight}]
 const ASPECTS = {"1:1": [1, 1], "4:5": [4, 5], "16:9": [16, 9]};
-const SHORT_PROMPT_FAMILIES = new Set(["sd15", "sdxl", "playground"]);   // CLIP stops reading at 77 tokens
 
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
@@ -84,13 +83,15 @@ function summary() {
   $("summary").textContent = `${$("width").value} × ${$("height").value} · ${n} render${n > 1 ? "s" : ""} · ${m ? m.name : ""}`;
 }
 function tokenCount() {
-  // rough CLIP estimate: words plus punctuation marks
+  // rough estimate: words plus punctuation marks (CLIP counts about this; T5/Qwen split long words a little more)
   const t = $("prompt").value.match(/[A-Za-z0-9']+|[^\sA-Za-z0-9]/g) || [];
   const m = modelById[$("model").value];
-  const short = m && SHORT_PROMPT_FAMILIES.has(m.family);
-  $("promptCount").textContent = short ? `~${t.length} / 75 tokens` : `~${t.length} tokens`;
-  $("promptCount").classList.toggle("warn", short && t.length > 75);
-  $("promptCount").title = short && t.length > 75 ? "This model stops reading after about 75 tokens; the end of the prompt is ignored." : "";
+  const limit = m && m.prompt_tokens;          // what this model reads; the API sends it per family
+  const over = limit && t.length > limit;
+  $("promptCount").textContent = limit ? `~${t.length} / ${limit} tokens` : `~${t.length} tokens`;
+  $("promptCount").classList.toggle("warn", !!over);
+  $("promptCount").title = over ? `This model stops reading after about ${limit} tokens; the end of the prompt is ignored.`
+    : limit ? `This model reads about ${limit} tokens.` : "";
 }
 function showModel() {
   const m = modelById[$("model").value];

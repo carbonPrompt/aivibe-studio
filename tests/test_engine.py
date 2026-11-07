@@ -338,3 +338,21 @@ def test_vae_savers_skip_vae_without_tiling():
     assert calls == ["slice"]
     enable_vae_savers(SimpleNamespace(vae=None))
     enable_vae_savers(SimpleNamespace(vae=SimpleNamespace()))
+
+
+def test_truncation_warning_only_for_clip_only_families(caplog):
+    from studio.engine import warn_truncation
+
+    class Tok:
+        model_max_length = 77
+        def __call__(self, text, truncation=False):
+            return type("R", (), {"input_ids": list(range(len(text.split()) + 2))})()
+        def decode(self, ids):
+            return "tail"
+
+    pipe = type("P", (), {"tokenizer": Tok()})()
+    long = "word " * 120
+    warn_truncation(pipe, long, family="zimage")
+    assert "ignored" not in caplog.text
+    warn_truncation(pipe, long, family="sdxl")
+    assert "ignored" in caplog.text

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from studio.batch import KEYS, BatchError, parse_batch
 from studio.providers import PROVIDERS, ProviderError
+from studio.registry import PROMPT_TOKENS
 from studio.video import VIDEO_FAMILIES
 
 log = logging.getLogger("studio.assistant")
@@ -35,6 +36,7 @@ def brief(registry, subjects, fallback_model: str | None = None) -> str:
         d = m.defaults
         models.append(f"{m.id} | {m.name} | {m.family} | installed {'yes' if registry.local_path(m.id) else 'no'} | "
                       f"{d.get('steps')} steps, guidance {d.get('guidance')}, {d.get('width')}x{d.get('height')} | "
+                      f"reads {PROMPT_TOKENS.get(m.family, 75)} prompt tokens | "
                       f"{m.description}")
     subs = [f"{s.name} ({s.kind}, {s.class_word})" for s in (subjects.all() if subjects else []) if s.trained]
     try:
@@ -46,7 +48,9 @@ def brief(registry, subjects, fallback_model: str | None = None) -> str:
         "You write picture batches for aiVibe Studio, a local image generator. You never make pictures yourself.",
         "Reply with JSON only, no other text: {\"defaults\": {...}, \"items\": [{...}, ...]}.",
         "Allowed keys: " + ", ".join(sorted(KEYS - NO_KEYS)) + ". Each item needs a prompt; defaults apply to every item.",
-        "- prompt: a vivid description under 50 words (the models read about 75 tokens; the rest is lost).",
+        "- prompt: a vivid description that fits the item's model (see 'reads N prompt tokens' in the model list; "
+        "one word is about 1.3 tokens and the rest is lost). For 75-token models stay under 50 words; for 256 or 512 "
+        "write a full paragraph with every detail asked for.",
         "- negative: things to avoid, short.",
         f"- width and height: multiples of 8 between 256 and 2048. Good sizes: {SIZES}.",
         f"- count: 1 to 8 pictures per item. At most {MAX_ITEMS} items.",
