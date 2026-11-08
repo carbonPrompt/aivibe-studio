@@ -1,3 +1,13 @@
+# aiVibe Studio 1.1.1
+
+Longer prompts where the model can read them.
+
+- The prompt counter now shows the limit of the model you picked: about 512 tokens for Z-Image Turbo and FLUX.2 klein, 256 for Stable Diffusion 3.5 and FLUX.1 Schnell, and 75 for Stable Diffusion 1.5, SDXL models and Playground. It turns orange only when you go past that model's limit. Before, every model showed 75.
+- The Batch Maker assistant now writes full, detailed prompts for the long-prompt models instead of keeping every prompt under 50 words.
+- The "end of prompt ignored" log warning now appears only for models that really cut the prompt off.
+
+Install or update: download `aiVibeStudio-Setup-1.1.1.exe` below and run it, or press **Updates** in the app. Your pictures, subjects, settings and models are kept.
+
 # aiVibe Studio 1.1.0
 
 Video, and a Batch Maker.
